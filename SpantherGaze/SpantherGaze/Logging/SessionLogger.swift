@@ -25,9 +25,9 @@ final class SessionLogger {
 
     /// One asteroid outcome for the parent report.
     func asteroid(_ r: AsteroidRecord, time: Double) {
-        write(["asteroid", fmt(time)] + Array(repeating: "", count: 14)
-              + [r.className, "\(r.level)", r.reactionSec.map(fmt) ?? "", fmt(r.lifetimeSec), "\(r.slips)", r.destroyed ? "1" : "0"]
-              .joined(separator: ","))
+        let cells: [String] = ["asteroid", fmt(time)] + Array(repeating: "", count: 14)
+            + [r.className, "\(r.level)", r.reactionSec.map(fmt) ?? "", fmt(r.lifetimeSec), "\(r.slips)", r.destroyed ? "1" : "0"]
+        write(cells.joined(separator: ","))
     }
 
     private func fmt(_ v: Double) -> String { String(format: "%.5f", v) }
