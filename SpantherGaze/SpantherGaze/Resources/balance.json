@@ -1,0 +1,30 @@
+{
+  "minDwellSec": 0.5,
+  "classes": {
+    "S":  { "sizePt": 64,  "dwellSec": 0.5, "travelSec": [6.0, 3.5],  "damage": 1 },
+    "M":  { "sizePt": 100, "dwellSec": 0.8, "travelSec": [7.0, 4.5],  "damage": 1 },
+    "L":  { "sizePt": 150, "dwellSec": 1.2, "travelSec": [8.0, 5.5],  "damage": 2 },
+    "XL": { "sizePt": 220, "dwellSec": 2.0, "travelSec": [10.0, 7.0], "damage": 3 }
+  },
+  "hitMarginPt": { "source": "validationMeanError", "min": 30, "max": 115 },
+  "dropoutGraceSec": 0.15,
+  "decayToZeroSec": 1.0,
+  "gazeBrake": { "levels1to3": 0.4, "later": 0.2 },
+  "spawnIntervalSec": [3.0, 2.0],
+  "maxOnScreen": [2, 3],
+  "maxOnScreenIfErrorAbovePt": { "errorPt": 60, "max": 2 },
+  "levelLengthSec": 45,
+  "earthShields": 5,
+
+  "levels": 10,
+  "classMixByLevel": [
+    [50, 50, 0, 0], [47, 47, 6, 0], [43, 43, 14, 0], [40, 40, 20, 0], [38, 38, 22, 2],
+    [37, 37, 23, 3], [35, 35, 25, 5], [33, 35, 25, 7], [32, 35, 25, 8], [30, 35, 25, 10]
+  ],
+  "adaptation": {
+    "hitsWindowSec": 10, "hitsToEase": 2, "easeStep": 0.1,
+    "streakToHarden": 6, "hardenStep": 0.05,
+    "advanceKillRatio": 0.8, "easeKillRatio": 0.5, "failEaseStep": 0.1
+  },
+  "pauseWhenFaceLostSec": 1.0
+}

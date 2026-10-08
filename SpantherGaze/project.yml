@@ -1,0 +1,23 @@
+# Fallback if the hand-written SpantherGaze.xcodeproj does not open:
+#   brew install xcodegen && xcodegen generate
+name: SpantherGaze
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: ru
+targets:
+  SpantherGaze:
+    type: application
+    platform: iOS
+    sources:
+      - SpantherGaze
+      - path: GazeCore/Sources/GazeCore
+        group: GazeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spanther.SpantherGaze
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Config/Info.plist
+        CODE_SIGN_STYLE: Automatic
