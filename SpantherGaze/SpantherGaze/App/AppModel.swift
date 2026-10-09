@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import QuartzCore
 
@@ -113,6 +114,19 @@ final class AppModel: ObservableObject {
         collecting = (target, kind)
         collectedFeatures = []
         collectedGaze = []
+    }
+
+    /// Drops the dot being collected (calibration cancelled).
+    func cancelCollecting() {
+        collecting = nil
+        collectedFeatures = []
+        collectedGaze = []
+    }
+
+    /// Camera access was refused in Settings, so face tracking cannot start.
+    var cameraDenied: Bool {
+        let s = AVCaptureDevice.authorizationStatus(for: .video)
+        return s == .denied || s == .restricted
     }
 
     /// Ends collection for one dot. Returns false when too few frames had a face (the dot is repeated).

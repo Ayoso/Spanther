@@ -35,6 +35,14 @@ struct CalibrationView: View {
                             .multilineTextAlignment(.center).padding(.top, 8)
                     }
                     Spacer()
+                    if started {
+                        Button {
+                            app.cancelCollecting()
+                            app.route = .menu
+                        } label: { Text("Отмена").font(.footnote.bold()).padding(.horizontal, 18).padding(.vertical, 10) }
+                            .buttonStyle(SecondaryButton())
+                            .padding(.bottom, 24)
+                    }
                 }
                 .padding(20)
             }

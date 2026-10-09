@@ -27,12 +27,24 @@ struct MenuView: View {
                 } label: { Text("Играть пальцем").frame(maxWidth: .infinity) }
                     .buttonStyle(SecondaryButton())
             }
+            if app.eyeTrackingSupported && app.cameraDenied {
+                VStack(spacing: 8) {
+                    Text("Нет доступа к камере, поэтому игра не видит взгляд. Разреши камеру в настройках и открой игру заново.")
+                        .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
+                    Button("Открыть настройки") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                    .font(.footnote.bold())
+                }
+            }
             if !app.eyeTrackingSupported {
                 Text("Этот iPhone не поддерживает отслеживание лица (нужен TrueDepth или чип A12 и новее). Доступна игра пальцем.")
                     .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
             }
             Toggle("Зрачки через Vision", isOn: $app.usePupils).font(.footnote).foregroundStyle(Palette.dim)
             Toggle("Отладка", isOn: $app.showDebug).font(.footnote).foregroundStyle(Palette.dim)
+            ShareLink(item: app.logURL) { Label("Экспорт CSV последней сессии", systemImage: "square.and.arrow.up") }
+                .font(.footnote)
             Spacer()
             Text("Изображение с камеры остаётся на телефоне.").font(.footnote).foregroundStyle(Palette.dim)
         }

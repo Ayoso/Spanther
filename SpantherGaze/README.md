@@ -5,7 +5,7 @@ Native SPANTHER prototype: SwiftUI + SpriteKit + ARKit face tracking. Meteors fa
 ## Status
 
 - `GazeCore` (pure Swift) builds and its 16 unit tests pass with Swift 6.0.3 on Linux.
-- The app target (ARKit, Vision, SwiftUI, SpriteKit) has **not been compiled yet**. It needs Xcode 16 or newer on a Mac. Expect a few compile fixes on the first build.
+- The app target compiles in GitHub Actions (Xcode 16.4 Release, and the newest Xcode on the runner in Debug), unsigned. A signed build to a real iPhone has not been done yet. Step-by-step Mac instructions (in Russian) are in the root README.
 - Nothing has run on an iPhone yet (CLAUDE.md rule 6).
 
 ## Build and run on an iPhone

@@ -32,6 +32,8 @@ jobs:
             SYMROOT="$PWD/build" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
+      - name: Check bundled resources
+        run: test -f build/Release-iphoneos/SpantherGaze.app/balance.json
       - name: Package .ipa
         run: |
           mkdir Payload
@@ -42,3 +44,27 @@ jobs:
           name: SpantherGaze-unsigned-ipa
           path: SpantherGaze-unsigned.ipa
           retention-days: 30
+
+  # The Mac that installs on a phone will usually have the newest Xcode and build Debug.
+  newest-xcode-debug:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest installed Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+      - name: Debug build for iPhone without signing
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SpantherGaze/SpantherGaze.xcodeproj \
+            -target SpantherGaze \
+            -configuration Debug \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+          test -f build/Debug-iphoneos/SpantherGaze.app/balance.json

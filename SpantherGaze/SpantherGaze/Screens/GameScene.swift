@@ -31,6 +31,8 @@ final class GameScene: SKScene {
 
     override func didMove(to view: SKView) {
         backgroundColor = UIColor(red: 0.027, green: 0.043, blue: 0.11, alpha: 1)
+        // SpriteView may present the scene again when SwiftUI rebuilds the view; keep the running game.
+        guard world.parent == nil else { return }
         addChild(world)
         start()
     }

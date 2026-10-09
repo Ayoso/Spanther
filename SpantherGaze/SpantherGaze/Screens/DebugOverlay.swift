@@ -24,6 +24,8 @@ struct DebugOverlay: View {
         var l = [String(format: "track %.0f fps  %.2f ms/frame  face %@", status.fps, status.processingMs, status.faceFound ? "yes" : "no")]
         if let f = status.features {
             l.append(String(format: "dist %.1f cm  yaw %.0f°  pitch %.0f°  roll %.0f°", f.distance * 100, f.yaw * 57.3, f.pitch * 57.3, f.roll * 57.3))
+            let le = f.leftEyeCamera, re = f.rightEyeCamera
+            l.append(String(format: "eye L %+.1f %+.1f %+.1f  R %+.1f %+.1f %+.1f cm", le.x * 100, le.y * 100, le.z * 100, re.x * 100, re.y * 100, re.z * 100))
             l.append(String(format: "lookAt hit  %+.1f, %+.1f mm", f.lookAtHit.x * 1000, f.lookAtHit.y * 1000))
             l.append(String(format: "eye-axis hit %+.1f, %+.1f mm", f.eyeAxisHit.x * 1000, f.eyeAxisHit.y * 1000))
             if let p = f.pupils {

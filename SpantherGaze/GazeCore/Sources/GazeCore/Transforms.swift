@@ -83,6 +83,10 @@ public struct GazeFeatures: Sendable {
     public var eyeAxisHit: Vec2
     public var yaw: Double, pitch: Double, roll: Double, distance: Double
     public var pupils: PupilOffsets?
+    /// Eye centres in camera space (metres): ARKit eye transforms moved through face → world → camera.
+    /// Not used by the model; shown in the debug overlay for the stage-0 check.
+    public var leftEyeCamera: Vec3 = .zero
+    public var rightEyeCamera: Vec3 = .zero
 
     public enum FeatureSet: String, CaseIterable, Sendable {
         /// Baseline from CLAUDE.md stage 1: lookAtPoint + head pose.
@@ -107,7 +111,8 @@ public struct GazeFeatures: Sendable {
         return GazeFeatures(
             lookAtHit: Transforms.cameraPlaneToPortrait((l1 + r1) * 0.5),
             eyeAxisHit: Transforms.cameraPlaneToPortrait((l2 + r2) * 0.5),
-            yaw: pose.yaw, pitch: pose.pitch, roll: pose.roll, distance: pose.distance, pupils: f.pupils)
+            yaw: pose.yaw, pitch: pose.pitch, roll: pose.roll, distance: pose.distance, pupils: f.pupils,
+            leftEyeCamera: lo, rightEyeCamera: ro)
     }
 
     /// Flat vector for the ridge model. Quadratic terms on the main ray let the model bend at the screen edges,

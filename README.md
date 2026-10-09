@@ -2,22 +2,54 @@
 
 Eye-controlled iPhone game for attention training (kids 6–10). Meteors fly at Earth; look at one and hold your gaze until it bursts. Bigger meteors need a longer look (0.5 / 0.8 / 1.2 / 2.0 s).
 
-## Run it on an iPhone (for whoever has the Mac)
+## Как поставить на iPhone (для того, у кого есть Mac)
 
-You need a Mac with **Xcode 16 or newer**, the iPhone (iPhone XS/XR or newer: face tracking needs a TrueDepth camera or an A12 chip) and a USB cable. A free Apple ID is enough.
+Нужно:
+- iPhone XS, XR или новее (чип A12 и выше). iPhone X и более старые не подойдут.
+- Mac и кабель, который передаёт данные (не только зарядку).
+- Xcode не старше версии iOS на телефоне. Версия iOS: Настройки → Основные → Об этом устройстве. Для iOS 18 нужен Xcode 16.4 или новее, для iOS 26 нужен Xcode 26. Xcode бесплатный, ставится из App Store и занимает около 40 ГБ. Если App Store не даёт поставить нужную версию, сначала обнови macOS.
+- Apple ID. Бесплатного хватит.
 
-1. `git clone https://github.com/Ayoso/Spanther.git` and open `SpantherGaze/SpantherGaze.xcodeproj`.
-   If Xcode can't open the project file, run `brew install xcodegen && cd SpantherGaze && xcodegen generate` and open the generated project.
-2. Click the **SpantherGaze** project → target **SpantherGaze** → **Signing & Capabilities**: tick *Automatically manage signing*, pick your **Team** (Xcode → Settings → Accounts to add an Apple ID). If it complains about the bundle id, change `com.spanther.SpantherGaze` to something unique like `com.<yourname>.spanther`.
-3. Plug in the iPhone, unlock it, tap **Trust**. On iOS 16+ turn on Settings → Privacy & Security → **Developer Mode** and restart.
-4. Pick the iPhone as the run destination at the top of Xcode and press **Run** (⌘R).
-5. First launch on the phone: Settings → General → VPN & Device Management → trust the developer, then open SPANTHER and allow the camera.
+Шаги:
+1. Скачай проект: `git clone https://github.com/Ayoso/Spanther.git` или на странице репозитория Code → Download ZIP, потом распакуй.
+2. Открой Xcode, прими лицензию и поставь платформу iOS: Xcode → Settings → Components → iOS → Get. Дождись конца загрузки.
+3. Xcode → Settings → Accounts → «+» → Apple ID. В списке появится команда «Имя (Personal Team)».
+4. Открой `SpantherGaze/SpantherGaze.xcodeproj`. Если Xcode не открывает файл проекта, выполни `brew install xcodegen && cd SpantherGaze && xcodegen generate` (Homebrew: brew.sh) и открой созданный проект.
+5. Подключи iPhone кабелем, разблокируй, нажми «Доверять» и введи код. Подожди, пока Xcode подготовит телефон: в Window → Devices and Simulators (⇧⌘2) у iPhone не должно быть значка ожидания или предупреждения.
+6. Включи режим разработчика на iPhone: Настройки → Конфиденциальность и безопасность → Режим разработчика (в самом низу списка) → Вкл → Перезагрузить. После перезагрузки нажми «Включить» и введи код. Пункт появляется только после того, как телефон подключили к Mac с открытым Xcode.
+7. Вверху окна Xcode выбери этот iPhone как устройство для запуска.
+8. Слева (⌘1) нажми синий значок SpantherGaze → в разделе TARGETS выбери SpantherGaze → вкладка Signing & Capabilities:
+   - включи Automatically manage signing;
+   - в Team выбери свою Personal Team;
+   - Bundle Identifier замени на свой, например `com.imya.spanther` (латиницей, без пробелов). Выбери один раз и больше не меняй: бесплатный Apple ID может создать только 10 таких идентификаторов в неделю.
+   Если остались красные ошибки про устройства или профиль, проверь, что iPhone выбран вверху, и нажми Try Again.
+9. Нажми Run (⌘R). Если macOS спросит доступ к связке ключей для codesign, введи пароль от Mac и нажми «Всегда разрешать».
+10. Первый запуск закончится ошибкой о ненадёжном разработчике («Could not launch» или «Untrusted Developer»). Так и должно быть. На iPhone: Настройки → Основные → VPN и управление устройством → твой Apple ID → Доверять. Потом снова нажми ⌘R.
+11. Разреши камеру. Если случайно запретил: Настройки → SPANTHER → Камера, потом открой игру заново.
 
-With a free Apple ID the app runs for 7 days; press Run again to renew. The game cannot run in the Simulator with eye tracking (ARKit face tracking needs a real device); "Играть пальцем" works there.
+Ограничения бесплатного Apple ID:
+- Приложение работает 7 дней. Потом подключи телефон к тому же Mac и снова нажми Run с тем же Bundle Identifier.
+- На одном телефоне одновременно могут стоять не больше 3 приложений, подписанных бесплатным Apple ID. Если Xcode пишет, что лимит исчерпан, удали одно из них (например, копию SPANTHER из Sideloadly).
 
-This is the first time the app target meets a real Xcode: if the build shows errors, send a screenshot or the error text back.
+Если сборка падает, пришли текст ошибок (⌘9 → последняя сборка) или скриншот. Код компилируется в GitHub Actions, но сборку с подписью на настоящий iPhone никто ещё не делал.
 
-Unit tests for the gaze math and game rules: `cd SpantherGaze/GazeCore && swift test`.
+Модульные тесты математики взгляда и правил игры: `cd SpantherGaze/GazeCore && swift test`. Если команда не находит Swift, сначала выполни `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
+
+## Что проверить на телефоне
+
+1. Игра пальцем. В меню «Играть пальцем», держи палец на падающем метеорите, пока он не взорвётся. Так проверяется экран игры без камеры.
+2. Отладка. Включи «Отладка» в меню и посмотри на строки внизу экрана:
+   - `fps` около 60 и `ms/frame`, `face yes`, когда лицо в кадре;
+   - `dist`: поставь телефон в 30 см от глаз по линейке и запиши число;
+   - `yaw`, `pitch`, `roll`: поверни голову влево и вправо, кивни, наклони к плечу; запиши, куда меняется каждое число;
+   - `eye L` и `eye R`: центры глаз в сантиметрах;
+   - `pupil`: держи голову неподвижно и смотри только глазами влево, вправо, вверх, вниз; запиши, какие числа меняются. Если всё время `pupil –`, это тоже важно.
+   Скорость точнее видна без Xcode: нажми Stop в Xcode и открой SPANTHER с домашнего экрана.
+3. Калибровка и проверка точности. Выключи «Отладка», нажми «Играть глазами», пройди 9 точек и потом 13 точек. Держи телефон вертикально примерно в 30 см, свет ровный на лице. Сфотографируй экран результата (средний промах и дрожание в см). Сделай два раза: с включённым «Зрачки через Vision» и с выключенным. Кнопка «Отмена» внизу возвращает в меню, если точка не засчитывается.
+4. Нажми «Экспорт CSV» на экране результата и сохрани файл.
+5. Поиграй уровень глазами. Отведи взгляд от телефона на 2 секунды: должно появиться «Посмотри на экран». После игры в меню есть «Экспорт CSV последней сессии» с результатами по метеоритам.
+
+Что прислать обратно: модель iPhone и версию iOS, версию Xcode, фото или запись экрана (Пункт управления → Запись экрана), CSV-файлы, текст ошибок, если они были.
 
 ## Folders
 
