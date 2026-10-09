@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#070b1c">
+<title>SPANTHER</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800&family=Nunito:wght@500;700;800&display=swap">
+<style>
+/* Layout: one full-bleed canvas (space + Earth), DOM overlays for menus, HUD pinned to the safe-area edges. */
+:root{
+  --space:#070b1c;       /* deep sky */
+  --space-2:#111a3a;     /* panel ground */
+  --ink:#eef1ff;         /* text */
+  --dim:#9aa3c7;         /* secondary text */
+  --gaze:#6ff0e0;        /* the player's gaze */
+  --fire:#ffb347;        /* meteor heat */
+  --hot:#ff5a36;         /* explosion / danger */
+  --earth:#3d8bff;
+  --line:rgba(160,175,230,.22);
+  --f-display:"Unbounded","Arial Black",system-ui,sans-serif;
+  --f-body:"Nunito",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%;background:var(--space);color:var(--ink);overflow:hidden;overscroll-behavior:none}
+body{font-family:var(--f-body);font-size:16px;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--gaze);outline-offset:3px}
+
+/* overlays */
+.screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 16px);z-index:5}
+.panel{width:min(440px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;gap:18px;padding:24px 20px;background:color-mix(in srgb,var(--space-2) 88%,transparent);border:1px solid var(--line);border-radius:18px;backdrop-filter:blur(6px)}
+.logo{font-family:var(--f-display);font-weight:800;font-size:clamp(34px,11vw,52px);letter-spacing:.06em;line-height:1;margin:0;text-align:center;background:linear-gradient(180deg,#fff 20%,var(--fire) 75%,var(--hot));-webkit-background-clip:text;background-clip:text;color:transparent}
+.tag{margin:0;text-align:center;color:var(--dim);line-height:1.45;text-wrap:balance}
+h2{font-family:var(--f-display);font-weight:500;font-size:20px;margin:0;text-align:center;text-wrap:balance}
+p{margin:0;line-height:1.45}
+.btns{display:flex;flex-direction:column;gap:10px}
+.btn{border:0;border-radius:14px;padding:15px 18px;font-weight:800;font-size:17px;background:var(--gaze);color:#04201d;display:flex;align-items:center;justify-content:center;gap:10px}
+.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn small{font-weight:600;opacity:.75;font-size:13px}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.chip{border:1px solid var(--line);background:transparent;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:700;color:var(--dim)}
+.chip[aria-pressed="true"]{color:var(--ink);border-color:var(--gaze)}
+.legend{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.legend div{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px;border-radius:12px;background:rgba(255,255,255,.03)}
+.legend i{display:block;border-radius:50%;background:radial-gradient(circle at 35% 35%,#c9a27a,#6b4a33 70%);box-shadow:0 0 12px rgba(255,179,71,.35)}
+.legend b{font-variant-numeric:tabular-nums;font-size:15px}
+.legend span{font-size:12px;color:var(--dim)}
+.about{display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:1.45;color:var(--ink);background:rgba(255,255,255,.035);border-radius:12px;padding:12px 14px}
+.about a{color:var(--gaze)}
+.note{font-size:13px;color:var(--dim);text-align:center;line-height:1.4}
+.err{color:#ffb4a3;font-size:14px;text-align:center;line-height:1.4}
+.stat{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat div{padding:10px;border-radius:12px;background:rgba(255,255,255,.04);text-align:center}
+.stat b{display:block;font-family:var(--f-display);font-size:22px;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--dim)}
+
+/* HUD */
+#hud{position:fixed;left:0;right:0;top:0;z-index:4;display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 0;pointer-events:none}
+#hud .grp{display:flex;gap:8px;align-items:center;pointer-events:auto}
+.pill{background:rgba(7,11,28,.6);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:800;font-variant-numeric:tabular-nums;font-size:15px;display:flex;gap:6px;align-items:center}
+.lives{display:flex;gap:4px}
+.lives i{width:12px;height:12px;border-radius:50%;background:var(--earth);box-shadow:0 0 6px var(--earth)}
+.lives i.off{background:transparent;border:1px solid var(--line);box-shadow:none}
+.iconbtn{background:rgba(7,11,28,.6);border:1px solid var(--line);border-radius:999px;min-width:36px;height:34px;padding:0 10px;font-size:13px;font-weight:800}
+#cam{position:fixed;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);width:84px;height:63px;border-radius:10px;overflow:hidden;border:2px solid var(--hot);z-index:4;background:#000}
+#cam.ok{border-color:var(--gaze)}
+#cam video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#debugPanel{position:fixed;left:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);z-index:6;margin:0;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;color:var(--gaze);background:rgba(0,0,0,.6);padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none}
+#toast{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);z-index:6;font-family:var(--f-display);font-size:20px;text-align:center;padding:14px 20px;border-radius:14px;background:rgba(7,11,28,.8);border:1px solid var(--line);max-width:calc(100% - 32px);pointer-events:none}
+#calibmsg{position:fixed;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 14px);text-align:center;color:var(--dim);z-index:6;font-weight:700;padding:0 16px;pointer-events:none}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<canvas id="stage" aria-label="Game field"></canvas>
+
+<div id="hud" hidden>
+  <div class="grp">
+    <div class="pill" aria-label="score"><span data-i18n="score">Score</span> <span id="score">0</span></div>
+    <div class="pill"><div class="lives" id="lives"></div></div>
+  </div>
+  <div class="grp">
+    <button class="iconbtn" id="btnRecal" data-i18n="recal" hidden>Recalibrate</button>
+    <button class="iconbtn" id="btnDbg" aria-pressed="false">DBG</button>
+    <button class="iconbtn" id="btnPause" aria-label="Pause">II</button>
+  </div>
+</div>
+<div id="cam" hidden><video id="video" playsinline muted autoplay></video></div>
+<pre id="debugPanel" hidden></pre>
+<div id="toast" hidden></div>
+<div id="calibmsg" hidden></div>
+
+<!-- start -->
+<div class="screen" id="scrMenu">
+  <div class="panel">
+    <h1 class="logo">SPANTHER</h1>
+    <p class="tag" data-i18n="tagline">Meteors are falling on Earth. Look at one and hold your gaze until it bursts.</p>
+    <div class="about">
+      <p data-i18n="about1">SPANTHER is a game that trains attention and concentration in children aged 6 to 10. The child controls it with their eyes.</p>
+      <p data-i18n="about2">How to play: look at a meteor and keep looking. A ring fills up, and when it closes the meteor bursts. The bigger the meteor, the longer you need to look.</p>
+      <p data-i18n="about3">This page is a web demo. Without a camera you can play with your finger or mouse. The full version is an iPhone app with eye tracking through ARKit.</p>
+      <p><a href="https://github.com/Ayoso/Spanther" target="_blank" rel="noopener" data-i18n="code">iPhone app code on GitHub</a></p>
+    </div>
+    <div class="legend" aria-label="Meteor sizes">
+      <div><i style="width:14px;height:14px"></i><b data-i18n="dS">0.5 s</b><span data-i18n="small">small</span></div>
+      <div><i style="width:21px;height:21px"></i><b data-i18n="dM">0.8 s</b><span data-i18n="medium">medium</span></div>
+      <div><i style="width:31px;height:31px"></i><b data-i18n="dL">1.2 s</b><span data-i18n="large">large</span></div>
+      <div><i style="width:44px;height:44px"></i><b data-i18n="dXL">2.0 s</b><span data-i18n="giant">giant</span></div>
+    </div>
+    <div class="btns">
+      <button class="btn" id="btnEyes"><span data-i18n="playEyes">Play with your eyes</span></button>
+      <button class="btn alt" id="btnTouch"><span data-i18n="playTouch">Play with finger or mouse</span></button>
+    </div>
+    <p class="err" id="menuErr" hidden></p>
+    <div class="row">
+      <button class="chip" id="lang-ru" aria-pressed="false">RU</button>
+      <button class="chip" id="lang-en" aria-pressed="false">EN</button>
+    </div>
+    <p class="note" data-i18n="privacy">The camera picture stays on this device. Nothing is uploaded.</p>
+  </div>
+</div>
+
+<!-- loading / calibration intro -->
+<div class="screen" id="scrCalib" hidden>
+  <div class="panel">
+    <h2 data-i18n="calibTitle">Let's teach the game your eyes</h2>
+    <p class="tag" id="calibStatus" data-i18n="loading">Starting the camera…</p>
+    <p class="tag" data-i18n="calibHow">Hold the phone about 30 cm from your face, keep your head still, and follow each dot with your eyes only.</p>
+    <div class="btns">
+      <button class="btn" id="btnCalibGo" disabled data-i18n="calibGo">Start (9 dots)</button>
+      <button class="btn alt" id="btnCalibBack" data-i18n="back">Back</button>
+    </div>
+  </div>
+</div>
+
+<!-- calibration result -->
+<div class="screen" id="scrResult" hidden>
+  <div class="panel">
+    <h2 data-i18n="resultTitle">Calibration done</h2>
+    <div class="stat">
+      <div><b id="resErr">·</b><span data-i18n="resErr">average miss</span></div>
+      <div><b id="resJit">·</b><span data-i18n="resJit">jitter</span></div>
+    </div>
+    <p class="note" id="resNote"></p>
+    <div class="btns">
+      <button class="btn" id="btnPlay" data-i18n="play">Play</button>
+      <button class="btn alt" id="btnRecal2" data-i18n="recalFull">Calibrate again</button>
+    </div>
+  </div>
+</div>
+
+<!-- pause -->
+<div class="screen" id="scrPause" hidden>
+  <div class="panel">
+    <h2 data-i18n="paused">Paused</h2>
+    <div class="btns">
+      <button class="btn" id="btnResume" data-i18n="resume">Resume</button>
+      <button class="btn alt" id="btnSound" data-i18n="soundOn">Sound: on</button>
+      <button class="btn alt" id="btnGaze" data-i18n="gazeOn">Show gaze dot: on</button>
+      <button class="btn alt" id="btnQuit" data-i18n="quit">Main menu</button>
+    </div>
+  </div>
+</div>
+
+<!-- game over -->
+<div class="screen" id="scrOver" hidden>
+  <div class="panel">
+    <h2 data-i18n="over">Earth took three hits</h2>
+    <div class="stat">
+      <div><b id="ovScore">0</b><span data-i18n="score">Score</span></div>
+      <div><b id="ovKills">0</b><span data-i18n="kills">meteors burst</span></div>
+    </div>
+    <div class="btns">
+      <button class="btn" id="btnAgain" data-i18n="again">Play again</button>
+      <button class="btn alt" id="btnMenu" data-i18n="quit">Main menu</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// ---------- i18n ----------
+const T = {
+  en: {
+    tagline:"Meteors are falling on Earth. Look at one and hold your gaze until it bursts.",
+    small:"small", medium:"medium", large:"large", giant:"giant", dS:"0.5 s", dM:"0.8 s", dL:"1.2 s", dXL:"2.0 s",
+    about1:"SPANTHER is a game that trains attention and concentration in children aged 6 to 10. The child controls it with their eyes.",
+    about2:"How to play: look at a meteor and keep looking. A ring fills up, and when it closes the meteor bursts. The bigger the meteor, the longer you need to look.",
+    about3:"This page is a web demo. Without a camera you can play with your finger or mouse. The full version is an iPhone app with eye tracking through ARKit.",
+    code:"iPhone app code on GitHub",
+    playEyes:"Play with your eyes", playTouch:"Play with finger or mouse",
+    privacy:"The camera picture stays on this device. Nothing is uploaded.",
+    calibTitle:"Let's teach the game your eyes", loading:"Starting the camera…", loadingModel:"Loading the face tracker…",
+    faceOk:"Face found. Ready when you are.", faceNo:"Can't see your face yet. Look at the screen in good light.",
+    calibHow:"Hold the phone about 30 cm from your face, keep your head still, and follow each dot with your eyes only.",
+    calibGo:"Start (9 dots)", back:"Back", calibLook:"Look at the dot", checkLook:"Now a quick check: look at the dot",
+    resultTitle:"Calibration done", resErr:"average miss", resJit:"jitter",
+    resGood:"Good enough to play. Bigger meteors are easier.", resMeh:"Tracking is rough. Calibrating again in better light usually helps.",
+    play:"Play", recalFull:"Calibrate again", recal:"Recalibrate",
+    paused:"Paused", resume:"Resume", quit:"Main menu",
+    soundOn:"Sound: on", soundOff:"Sound: off", gazeOn:"Show gaze dot: on", gazeOff:"Show gaze dot: off",
+    over:"Earth took three hits", score:"Score", kills:"meteors burst", again:"Play again",
+    lookBack:"Look at the screen", wave:"Wave",
+    noCam:"The camera is blocked here. Open the hosted game in your phone's browser (it needs https), or play with your finger.",
+    camDenied:"Camera access was refused. Allow the camera for this site and try again, or play with your finger.",
+    modelFail:"The face tracker failed to load: ",
+    lostPoint:"Lost your face on that dot. Repeating it.",
+  },
+  ru: {
+    tagline:"Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся.",
+    small:"малый", medium:"средний", large:"большой", giant:"гигант", dS:"0,5 с", dM:"0,8 с", dL:"1,2 с", dXL:"2,0 с",
+    about1:"SPANTHER это игра для детей от 6 до 10 лет, которая тренирует внимание и концентрацию. Ребёнок управляет игрой взглядом.",
+    about2:"Как играть: посмотри на метеорит и не отводи взгляд. Вокруг него заполняется кольцо, и когда оно замкнётся, метеорит взорвётся. Чем больше метеорит, тем дольше нужно смотреть.",
+    about3:"Эта страница демо для браузера. Без камеры можно играть пальцем или мышью. Полная версия это приложение для iPhone с отслеживанием взгляда через ARKit.",
+    code:"Код приложения для iPhone на GitHub",
+    playEyes:"Играть глазами", playTouch:"Играть пальцем или мышью",
+    privacy:"Изображение с камеры остаётся на этом устройстве и никуда не отправляется.",
+    calibTitle:"Научим игру твоим глазам", loading:"Включаем камеру…", loadingModel:"Загружаем трекер лица…",
+    faceOk:"Лицо найдено. Можно начинать.", faceNo:"Пока не видно лица. Посмотри на экран при хорошем свете.",
+    calibHow:"Держи телефон примерно в 30 см от лица, не двигай головой и следи за каждой точкой только глазами.",
+    calibGo:"Начать (9 точек)", back:"Назад", calibLook:"Смотри на точку", checkLook:"Быстрая проверка: смотри на точку",
+    resultTitle:"Калибровка готова", resErr:"средний промах", resJit:"дрожание",
+    resGood:"Можно играть. Большие метеориты сбивать легче.", resMeh:"Трекинг неточный. Обычно помогает повторная калибровка при лучшем свете.",
+    play:"Играть", recalFull:"Откалибровать заново", recal:"Калибровка",
+    paused:"Пауза", resume:"Продолжить", quit:"Главное меню",
+    soundOn:"Звук: вкл", soundOff:"Звук: выкл", gazeOn:"Точка взгляда: вкл", gazeOff:"Точка взгляда: выкл",
+    over:"Земля получила три удара", score:"Очки", kills:"метеоритов взорвано", again:"Ещё раз",
+    lookBack:"Посмотри на экран", wave:"Волна",
+    noCam:"Здесь камера заблокирована. Открой игру по https-ссылке в браузере телефона или играй пальцем.",
+    camDenied:"Доступ к камере запрещён. Разреши камеру для этого сайта и попробуй снова или играй пальцем.",
+    modelFail:"Не удалось загрузить трекер лица: ",
+    lostPoint:"Лицо пропало на этой точке. Повторяем.",
+  }
+};
+let lang = "ru";
+try { lang = localStorage.getItem("spanther.lang") || "ru"; } catch { lang = "ru"; }
+const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
+function applyLang(){
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  $("lang-ru").setAttribute("aria-pressed", lang==="ru"); $("lang-en").setAttribute("aria-pressed", lang==="en");
+  syncToggles();
+}
+const $ = id => document.getElementById(id);
+
+// ---------- tuning ----------
+// Dwell time grows linearly with radius: smallest meteor 0.5 s (the CLAUDE.md target), largest 1.6 s.
+// Numbers from docs/BALANCE.md: drawn diameter in pt on a 390 pt wide phone, gaze time, travel time at d = 0 and d = 1.
+const SIZES = {
+  S:  { size:64,  dwell:0.5, travel:[6.0, 3.5],  pts:10 },
+  M:  { size:100, dwell:0.8, travel:[7.0, 4.5],  pts:20 },
+  L:  { size:150, dwell:1.2, travel:[8.0, 5.5],  pts:30 },
+  XL: { size:220, dwell:2.0, travel:[10.0, 7.0], pts:50 },
+};
+const MIX = [[50,50,0,0],[47,47,6,0],[43,43,14,0],[40,40,20,0],[38,38,22,2],[37,37,23,3],[35,35,25,5],[33,35,25,7],[32,35,25,8],[30,35,25,10]];
+const difficulty = lv => { const t = Math.min(9, Math.max(0, lv-1))/9; return t*t*(3-2*t); };
+const lerp = (a, d) => a[0] + (a[1]-a[0])*d;
+const GRACE = 0.15;          // s the gaze may slip off before progress starts draining
+const DRAIN_SEC = 1.0;       // a full ring drains to zero in this many seconds once the gaze leaves
+function radiusFor(size){ return SIZES[size].size/2 * Math.min(W, 520, H*0.6)/390; }
+function dwellFor(size){ return SIZES[size].dwell; }
+
+// ---------- canvas ----------
+const cv = $("stage"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, earth = {x:0,y:0,R:0}, earthImg = null, stars = [];
+function resize(){
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  earth.R = Math.max(W*0.62, 220); earth.x = W/2; earth.y = H + earth.R*0.62;
+  earthImg = paintEarth(earth.R);
+  stars = Array.from({length: Math.round(W*H/2600)}, () => ({x:Math.random()*W, y:Math.random()*H, z:Math.random()*0.8+0.2}));
+}
+function rng(seed){ return () => (seed = (seed*16807) % 2147483647) / 2147483647; }
+function paintEarth(R){
+  const s = Math.ceil(R*2+40), c = document.createElement("canvas"); c.width = c.height = s;
+  const g = c.getContext("2d"), cx = s/2;
+  const glow = g.createRadialGradient(cx,cx,R*0.9,cx,cx,R+20);
+  glow.addColorStop(0,"rgba(90,160,255,.55)"); glow.addColorStop(1,"rgba(90,160,255,0)");
+  g.fillStyle = glow; g.fillRect(0,0,s,s);
+  g.save(); g.beginPath(); g.arc(cx,cx,R,0,Math.PI*2); g.clip();
+  const sea = g.createRadialGradient(cx-R*0.3,cx-R*0.5,R*0.1,cx,cx,R);
+  sea.addColorStop(0,"#4fa3ff"); sea.addColorStop(1,"#123a8c"); g.fillStyle = sea; g.fillRect(0,0,s,s);
+  const r = rng(7);
+  for (let i=0;i<26;i++){
+    const x = cx + (r()-0.5)*R*1.8, y = cx - R + r()*R*0.9, rr = R*(0.06+r()*0.16);
+    g.fillStyle = r()<0.35 ? "#c8b27a" : "#3fae6a"; g.beginPath();
+    for (let a=0;a<Math.PI*2;a+=0.5){ const q = rr*(0.6+r()*0.6); g.lineTo(x+Math.cos(a)*q, y+Math.sin(a)*q*0.7); }
+    g.closePath(); g.fill();
+  }
+  g.fillStyle = "rgba(255,255,255,.18)";
+  for (let i=0;i<14;i++){ g.beginPath(); g.ellipse(cx+(r()-0.5)*R*1.8, cx-R+r()*R*0.8, R*(0.1+r()*0.2), R*0.025, r()*0.4-0.2, 0, Math.PI*2); g.fill(); }
+  g.restore();
+  return c;
+}
+
+// ---------- audio ----------
+let AC = null, soundOn = true, hum = null;
+function audio(){
+  if (!AC) { try { AC = new (window.AudioContext||window.webkitAudioContext)(); } catch { AC = null; } }
+  if (AC && AC.state === "suspended") AC.resume();
+  return AC;
+}
+function boom(big){
+  const a = audio(); if (!a || !soundOn) return;
+  const len = 0.5 + big*0.4, buf = a.createBuffer(1, a.sampleRate*len, a.sampleRate), d = buf.getChannelData(0);
+  for (let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2);
+  const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+  src.buffer = buf; f.type = "lowpass"; f.frequency.setValueAtTime(2400, a.currentTime); f.frequency.exponentialRampToValueAtTime(120, a.currentTime+len);
+  g.gain.value = 0.55; src.connect(f).connect(g).connect(a.destination); src.start();
+}
+function thud(){
+  const a = audio(); if (!a || !soundOn) return;
+  const o = a.createOscillator(), g = a.createGain(); o.type = "sine";
+  o.frequency.setValueAtTime(110, a.currentTime); o.frequency.exponentialRampToValueAtTime(35, a.currentTime+0.6);
+  g.gain.setValueAtTime(0.7, a.currentTime); g.gain.exponentialRampToValueAtTime(0.001, a.currentTime+0.7);
+  o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+0.7);
+}
+function setHum(p){ // rising tone while a meteor is being stared at
+  const a = AC; if (!a) return;
+  if (!hum){ const o = a.createOscillator(), g = a.createGain(); o.type="triangle"; g.gain.value=0; o.connect(g).connect(a.destination); o.start(); hum={o,g}; }
+  const on = soundOn && p > 0;
+  hum.g.gain.setTargetAtTime(on ? 0.06 : 0, a.currentTime, 0.03);
+  if (on) hum.o.frequency.setTargetAtTime(220 + p*520, a.currentTime, 0.03);
+}
+
+// ---------- input: gaze source ----------
+// mode: "touch" uses pointer position; "eyes" uses the calibrated tracker
+let mode = "touch", pointer = null, showGaze = true;
+cv.addEventListener("pointermove", e => { if (mode==="touch" && (e.pointerType==="mouse" || e.buttons)) pointer = {x:e.clientX, y:e.clientY}; });
+cv.addEventListener("pointerdown", e => { if (mode==="touch") pointer = {x:e.clientX, y:e.clientY}; });
+const lift = e => { if (mode==="touch" && e.pointerType!=="mouse") pointer = null; };
+cv.addEventListener("pointerup", lift); cv.addEventListener("pointercancel", lift);
+cv.addEventListener("pointerleave", e => { if (mode==="touch") pointer = null; });
+
+// ---------- eye tracking ----------
+const video = $("video");
+const tracker = { lm:null, ready:false, feat:null, faceSeen:0, lastVT:-1, ms:0, fps:0, frames:0, fpsT:0, model:null, gaze:null, raw:null, err:null, tol:40 };
+
+// One Euro filter (Casiez et al. 2012), in normalized screen units
+class OneEuro {
+  constructor(minCutoff=0.9, beta=0.6, dCutoff=1){ Object.assign(this,{minCutoff,beta,dCutoff}); this.x=null; this.dx=0; this.t=0; }
+  static a(cut, dt){ const r = 2*Math.PI*cut*dt; return r/(r+1); }
+  filter(x, t){
+    if (this.x===null){ this.x=x; this.t=t; return x; }
+    const dt = Math.max(1e-3, t-this.t); this.t = t;
+    const dx = (x-this.x)/dt; this.dx += OneEuro.a(this.dCutoff,dt)*(dx-this.dx);
+    const cut = this.minCutoff + this.beta*Math.abs(this.dx);
+    this.x += OneEuro.a(cut,dt)*(x-this.x); return this.x;
+  }
+  reset(){ this.x=null; this.dx=0; }
+}
+const fx = new OneEuro(), fy = new OneEuro();
+
+async function startCamera(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error("nocam"), {code:"noCam"});
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:"user", width:{ideal:640}, height:{ideal:480} } }); }
+  catch (e) { throw Object.assign(new Error(e && e.name || "cam"), {code: (e && e.name==="NotAllowedError" && window.isSecureContext && !inSandbox()) ? "camDenied" : "noCam"}); }
+  video.srcObject = stream; await video.play().catch(()=>{});
+}
+function inSandbox(){ try { return window.top !== window.self; } catch { return true; } }
+
+async function loadTracker(){
+  const base = new URL("vendor/", location.href).href;
+  const vision = await import(base + "vision_bundle.mjs");
+  const fileset = await vision.FilesetResolver.forVisionTasks(base + "wasm");
+  const opts = d => ({ baseOptions:{ modelAssetPath: base + "face_landmarker.task", delegate:d }, runningMode:"VIDEO", numFaces:1, outputFacialTransformationMatrixes:true });
+  try { tracker.lm = await vision.FaceLandmarker.createFromOptions(fileset, opts("GPU")); }
+  catch { tracker.lm = await vision.FaceLandmarker.createFromOptions(fileset, opts("CPU")); }
+  tracker.ready = true;
+}
+
+// Features in image space (video px). Eye axis runs image-left -> image-right for both eyes, so signs agree.
+function eyeFeat(L, a, b, top, bot, iris, vw, vh){
+  const P = i => ({x:L[i].x*vw, y:L[i].y*vh});
+  const A=P(a), B=P(b), C=P(iris), U=P(top), D=P(bot);
+  const ex=B.x-A.x, ey=B.y-A.y, len=Math.hypot(ex,ey)||1, ux=ex/len, uy=ey/len;
+  const mx=(A.x+B.x)/2, my=(A.y+B.y)/2, dx=C.x-mx, dy=C.y-my;
+  const lidMid = {x:(U.x+D.x)/2, y:(U.y+D.y)/2};
+  return { u:(dx*ux+dy*uy)/len, v:(-dx*uy+dy*ux)/len, vl:(-(C.x-lidMid.x)*uy+(C.y-lidMid.y)*ux)/len, open:Math.hypot(U.x-D.x,U.y-D.y)/len, len };
+}
+function extract(res){
+  if (!res || !res.faceLandmarks || !res.faceLandmarks.length) return null;
+  const L = res.faceLandmarks[0]; if (L.length < 478) return null;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const r = eyeFeat(L, 33, 133, 159, 145, 468, vw, vh);   // subject's right eye (image left)
+  const l = eyeFeat(L, 362, 263, 386, 374, 473, vw, vh);  // subject's left eye (image right)
+  let yaw=0, pitch=0;
+  const M = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0];
+  if (M && M.data){ const m = M.data; yaw = Math.atan2(m[8], m[10]); pitch = Math.asin(Math.max(-1,Math.min(1,-m[9]))); }
+  const nose = L[1];
+  const u=(r.u+l.u)/2, v=(r.v+l.v)/2, vl=(r.vl+l.vl)/2, open=(r.open+l.open)/2;
+  // the vector the regression sees
+  return [u, v, vl, open, u*u, v*v, u*v, yaw, pitch, nose.x, nose.y, (r.len+l.len)/vw];
+}
+
+function trackLoop(){
+  requestAnimationFrame(trackLoop);
+  if (!tracker.ready || video.readyState < 2 || video.currentTime === tracker.lastVT) return;
+  tracker.lastVT = video.currentTime;
+  const t0 = performance.now();
+  let res = null; try { res = tracker.lm.detectForVideo(video, t0); } catch (e) { tracker.err = String(e); }
+  tracker.ms = performance.now() - t0;
+  tracker.frames++; if (t0 - tracker.fpsT > 1000){ tracker.fps = tracker.frames*1000/(t0-tracker.fpsT); tracker.frames = 0; tracker.fpsT = t0; }
+  tracker.feat = extract(res);
+  if (tracker.feat) tracker.faceSeen = t0;
+  $("cam").classList.toggle("ok", !!tracker.feat);
+  if (tracker.feat && tracker.model){
+    const p = predict(tracker.model, tracker.feat);
+    tracker.raw = p;
+    const ts = t0/1000;
+    tracker.gaze = { x: Math.max(0,Math.min(1, fx.filter(p.x, ts)))*W, y: Math.max(0,Math.min(1, fy.filter(p.y, ts)))*H };
+  } else if (!tracker.feat) { tracker.gaze = null; }
+  if (calib.active) calibSample();
+}
+
+// ---------- ridge regression ----------
+function fitRidge(X, Y, lambda){
+  const n = X.length, d = X[0].length;
+  const mu = Array(d).fill(0), sd = Array(d).fill(0);
+  for (const x of X) for (let j=0;j<d;j++) mu[j]+=x[j]/n;
+  for (const x of X) for (let j=0;j<d;j++) sd[j]+=(x[j]-mu[j])**2/n;
+  for (let j=0;j<d;j++) sd[j] = Math.sqrt(sd[j]) || 1;
+  const Z = X.map(x => [1, ...x.map((v,j)=>(v-mu[j])/sd[j])]), D = d+1;
+  const solve = y => {
+    const A = Array.from({length:D}, (_,i)=>Array.from({length:D+1},(_,j)=>0));
+    for (let k=0;k<n;k++){ const z=Z[k]; for (let i=0;i<D;i++){ for (let j=0;j<D;j++) A[i][j]+=z[i]*z[j]; A[i][D]+=z[i]*y[k]; } }
+    for (let i=1;i<D;i++) A[i][i] += lambda*n;   // no penalty on the bias
+    for (let c=0;c<D;c++){
+      let p=c; for (let r=c+1;r<D;r++) if (Math.abs(A[r][c])>Math.abs(A[p][c])) p=r;
+      [A[c],A[p]]=[A[p],A[c]]; const v=A[c][c]||1e-12;
+      for (let r=0;r<D;r++){ if (r===c) continue; const f=A[r][c]/v; for (let j=c;j<=D;j++) A[r][j]-=f*A[c][j]; }
+    }
+    return A.map((row,i)=>row[D]/(row[i]||1e-12));
+  };
+  return { mu, sd, wx: solve(Y.map(p=>p.x)), wy: solve(Y.map(p=>p.y)) };
+}
+function predict(m, x){
+  let px=m.wx[0], py=m.wy[0];
+  for (let j=0;j<x.length;j++){ const z=(x[j]-m.mu[j])/m.sd[j]; px+=m.wx[j+1]*z; py+=m.wy[j+1]*z; }
+  return {x:px, y:py};
+}
+
+// ---------- calibration ----------
+const CAL_PTS = [[.12,.12],[.5,.12],[.88,.12],[.12,.5],[.5,.5],[.88,.5],[.12,.88],[.5,.88],[.88,.88]];
+const VAL_PTS = [[.3,.3],[.7,.3],[.3,.72],[.7,.72]];
+const SETTLE = 0.65, COLLECT = 0.9;
+const calib = { active:false, phase:"cal", idx:0, t0:0, X:[], Y:[], cur:[], val:[], points:CAL_PTS };
+function startCalibration(){
+  showScreen(null); $("hud").hidden = true;
+  Object.assign(calib, { active:true, phase:"cal", idx:0, t0:performance.now()/1000, X:[], Y:[], cur:[], val:[], points:CAL_PTS });
+  tracker.model = null; fx.reset(); fy.reset();
+  calibMsg(t("calibLook")); state = "calib";
+}
+function calibMsg(s){ const el=$("calibmsg"); el.textContent=s; el.hidden=!s; }
+function calibSample(){
+  const now = performance.now()/1000, el = now - calib.t0;
+  if (el < SETTLE) return;
+  const [nx,ny] = calib.points[calib.idx];
+  if (tracker.feat) {
+    if (calib.phase==="cal") calib.cur.push(tracker.feat.slice());
+    else if (tracker.raw) calib.cur.push({x:tracker.raw.x, y:tracker.raw.y});
+  }
+  if (el < SETTLE + COLLECT) return;
+  if (calib.cur.length < 8) { calibMsg(t("lostPoint")); calib.cur = []; calib.t0 = now; return; } // face lost: repeat point
+  if (calib.phase==="cal") { for (const f of calib.cur){ calib.X.push(f); calib.Y.push({x:nx,y:ny}); } }
+  else calib.val.push({target:{x:nx,y:ny}, pts:calib.cur});
+  calib.cur = []; calib.idx++; calib.t0 = now;
+  calibMsg(calib.phase==="cal" ? t("calibLook") : t("checkLook"));
+  if (calib.idx >= calib.points.length){
+    if (calib.phase==="cal"){
+      tracker.model = fitRidge(calib.X, calib.Y, 0.02);
+      Object.assign(calib, { phase:"val", idx:0, points:VAL_PTS }); calibMsg(t("checkLook"));
+    } else finishCalibration();
+  }
+}
+function finishCalibration(){
+  calib.active = false; calibMsg("");
+  // mean miss (distance of each sample's mean to the target) and jitter (RMS spread around that mean), in CSS px
+  let miss=0, jit=0;
+  for (const v of calib.val){
+    const mx = v.pts.reduce((s,p)=>s+p.x,0)/v.pts.length, my = v.pts.reduce((s,p)=>s+p.y,0)/v.pts.length;
+    miss += Math.hypot((mx-v.target.x)*W, (my-v.target.y)*H);
+    jit += Math.sqrt(v.pts.reduce((s,p)=>s+((p.x-mx)*W)**2+((p.y-my)*H)**2,0)/v.pts.length);
+  }
+  miss/=calib.val.length; jit/=calib.val.length;
+  // hit zone follows the measured error, as CLAUDE.md stage 3 asks
+  tracker.tol = Math.max(18, Math.min(90, 0.6*miss + 0.8*jit));
+  tracker.calErr = miss; tracker.calJit = jit;
+  const cm = px => (px/64).toFixed(1); // ~64 CSS px per cm on a typical phone
+  $("resErr").textContent = Math.round(miss) + " px";
+  $("resJit").textContent = Math.round(jit) + " px";
+  $("resNote").textContent = `≈ ${cm(miss)} / ${cm(jit)} cm. ` + (miss < Math.min(W,H)*0.15 ? t("resGood") : t("resMeh"));
+  state = "result"; showScreen("scrResult");
+}
+
+// ---------- game ----------
+let state = "menu", meteors = [], parts = [], rings = [], score = 0, kills = 0, lives = 3, level = 1, spawnT = 0, shake = 0, lastT = 0, lostT = 0, freeze = false;
+function newGame(){
+  meteors = []; parts = []; rings = []; score = 0; kills = 0; lives = 3; level = 1; spawnT = 0.6; shake = 0;
+  updateHud(); state = "play"; showScreen(null); $("hud").hidden = false; $("btnRecal").hidden = mode!=="eyes";
+  try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(()=>{}); } catch {}
+}
+function updateHud(){
+  $("score").textContent = score;
+  $("lives").innerHTML = [0,1,2].map(i => `<i class="${i<lives?"":"off"}"></i>`).join("");
+}
+function spawn(){
+  const mix = MIX[Math.min(9, level-1)], names = ["S","M","L","XL"];
+  let roll = Math.random()*100, size = "S";
+  for (let k=0;k<4;k++){ if (roll < mix[k]) { size = names[k]; break; } roll -= mix[k]; }
+  const r = radiusFor(size) * (0.94 + Math.random()*0.12);
+  const x = r + Math.random()*(W - 2*r), y = -r;
+  const tx = earth.x + (x - earth.x)*0.45, ty = earth.y - earth.R;
+  const travel = lerp(SIZES[size].travel, difficulty(level));
+  const shape = Array.from({length:11}, () => 0.82 + Math.random()*0.22);
+  const craters = Array.from({length:3}, () => ({a:Math.random()*6.28, d:Math.random()*0.5, s:0.12+Math.random()*0.14}));
+  meteors.push({ x, y, vx:(tx-x)/travel, vy:(ty-y)/travel, r, size, dwell:dwellFor(size), prog:0, lastIn:-9, rot:Math.random()*6.28, vr:(Math.random()-0.5)*1.2, shape, craters, born:performance.now()/1000 });
+}
+function gazePoint(){ return mode==="eyes" ? tracker.gaze : pointer; }
+function tol(){ return mode==="eyes" ? tracker.tol : 6; }
+
+function step(dt, now){
+  const g = gazePoint();
+  // face lost in eye mode -> freeze the world after a beat, resume when it comes back
+  if (mode==="eyes"){
+    const lost = now - tracker.faceSeen/1000 > 0.8;
+    if (lost !== freeze){ freeze = lost; toast(lost ? t("lookBack") : ""); }
+    if (freeze) { setHum(0); return; }
+  }
+  spawnT -= dt;
+  const d = difficulty(level);
+  let maxOn = Math.round(lerp([2, 3], d)); if (mode==="eyes" && tracker.tol > 60) maxOn = Math.min(maxOn, 2);
+  if (spawnT <= 0 && meteors.length < maxOn){ spawn(); spawnT = lerp([3.0, 2.0], d); }
+
+  // pick at most one target: the closest meteor whose hit zone contains the gaze
+  let target = null, best = Infinity;
+  if (g) for (const m of meteors){ const d = Math.hypot(g.x-m.x, g.y-m.y); if (d < m.r + tol() && d < best){ best = d; target = m; } }
+  let humP = 0;
+  for (let i = meteors.length-1; i >= 0; i--){
+    const m = meteors[i];
+    const brake = m === target ? (level <= 3 ? 0.4 : 0.2) : 0;   // gaze brake from BALANCE.md
+    m.x += m.vx*dt*(1-brake); m.y += m.vy*dt*(1-brake); m.rot += m.vr*dt;
+    if (m === target){ m.prog += dt; m.lastIn = now; humP = m.prog/m.dwell; }
+    else if (now - m.lastIn > GRACE) m.prog = Math.max(0, m.prog - m.dwell*dt/DRAIN_SEC);
+    if (m.prog >= m.dwell){
+      explode(m); meteors.splice(i,1); score += SIZES[m.size].pts; kills++;
+      if (kills % 8 === 0){ level++; toast(`${t("wave")} ${level}`, 1.2); }
+      updateHud(); continue;
+    }
+    if (Math.hypot(m.x-earth.x, m.y-earth.y) < earth.R + m.r*0.4){
+      impact(m); meteors.splice(i,1); lives--; updateHud();
+      if (lives <= 0){ gameOver(); return; }
+    }
+  }
+  setHum(humP);
+}
+function explode(m){
+  boom(m.size==="L"||m.size==="XL"?1:m.size==="M"?0.5:0);
+  window.__spanther.log.push({ size:m.size, r:Math.round(m.r), dwell:+m.dwell.toFixed(3), held:+m.prog.toFixed(3), t:performance.now() });
+  const n = 26 + Math.round(m.r*0.6);
+  for (let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, s = (40 + Math.random()*260) * (m.r/40);
+    parts.push({ x:m.x, y:m.y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:0.5+Math.random()*0.7, age:0, size:1.5+Math.random()*m.r*0.12, hot:Math.random()<0.6 });
+  }
+  rings.push({x:m.x, y:m.y, r:m.r, age:0, life:0.5, c:"255,200,120"});
+}
+function impact(m){
+  thud(); shake = 0.45;
+  rings.push({x:m.x, y:earth.y-earth.R, r:m.r, age:0, life:0.7, c:"255,90,54"});
+}
+function gameOver(){
+  state = "over"; setHum(0); $("hud").hidden = true;
+  $("ovScore").textContent = score; $("ovKills").textContent = kills; showScreen("scrOver");
+}
+let toastTimer = 0;
+function toast(s, secs){ const el=$("toast"); el.textContent=s; el.hidden=!s; clearTimeout(toastTimer); if (s && secs) toastTimer=setTimeout(()=>{el.hidden=true;}, secs*1000); }
+
+// ---------- render ----------
+function drawMeteor(m, now){
+  const p = m.prog/m.dwell;
+  // trail
+  const sp = Math.hypot(m.vx,m.vy)||1, tx = -m.vx/sp, ty = -m.vy/sp;
+  const tr = ctx.createLinearGradient(m.x, m.y, m.x+tx*m.r*3.2, m.y+ty*m.r*3.2);
+  tr.addColorStop(0, `rgba(255,${150-p*80|0},60,.55)`); tr.addColorStop(1, "rgba(255,120,40,0)");
+  ctx.fillStyle = tr; ctx.beginPath();
+  ctx.moveTo(m.x - ty*m.r*0.8, m.y + tx*m.r*0.8); ctx.lineTo(m.x+tx*m.r*3.2, m.y+ty*m.r*3.2); ctx.lineTo(m.x + ty*m.r*0.8, m.y - tx*m.r*0.8); ctx.fill();
+  // body, heating up as the gaze holds
+  ctx.save(); ctx.translate(m.x, m.y);
+  if (p > 0){ const j = p*p*m.r*0.06; ctx.translate((Math.random()-0.5)*j, (Math.random()-0.5)*j); }
+  ctx.rotate(m.rot);
+  const body = ctx.createRadialGradient(-m.r*0.35,-m.r*0.35,m.r*0.1,0,0,m.r);
+  const lr = (a,b) => Math.round(a+(b-a)*p);
+  body.addColorStop(0, `rgb(${lr(201,255)},${lr(162,214)},${lr(122,140)})`);
+  body.addColorStop(1, `rgb(${lr(92,200)},${lr(64,60)},${lr(44,30)})`);
+  ctx.fillStyle = body; ctx.beginPath();
+  m.shape.forEach((k,i) => { const a = i/m.shape.length*Math.PI*2; ctx.lineTo(Math.cos(a)*m.r*k, Math.sin(a)*m.r*k); });
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = `rgba(40,25,18,${0.35*(1-p)})`;
+  for (const c of m.craters){ ctx.beginPath(); ctx.arc(Math.cos(c.a)*m.r*c.d, Math.sin(c.a)*m.r*c.d, m.r*c.s, 0, Math.PI*2); ctx.fill(); }
+  if (p > 0.35){ // cracks glowing through
+    ctx.strokeStyle = `rgba(255,240,180,${(p-0.35)*1.4})`; ctx.lineWidth = Math.max(1.5, m.r*0.05);
+    for (let i=0;i<4;i++){ const a=i*1.6+0.4; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(a)*m.r*0.5, Math.sin(a)*m.r*0.5); ctx.lineTo(Math.cos(a+0.4)*m.r*0.85, Math.sin(a+0.4)*m.r*0.85); ctx.stroke(); }
+  }
+  ctx.restore();
+  // dwell ring
+  if (p > 0){
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(111,240,224,.18)"; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r+10, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = "#6ff0e0"; ctx.shadowColor = "#6ff0e0"; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r+10, -Math.PI/2, -Math.PI/2 + p*Math.PI*2); ctx.stroke(); ctx.shadowBlur = 0;
+  }
+}
+function render(now, dt){
+  ctx.save();
+  ctx.fillStyle = "#070b1c"; ctx.fillRect(0,0,W,H);
+  if (shake > 0){ ctx.translate((Math.random()-0.5)*shake*24, (Math.random()-0.5)*shake*24); }
+  const drift = (state==="play" && !freeze) ? dt : dt*0.3;
+  ctx.fillStyle = "#dfe6ff";
+  for (const s of stars){ s.y += s.z*14*drift; if (s.y > H) { s.y = 0; s.x = Math.random()*W; } ctx.globalAlpha = 0.35 + s.z*0.6; ctx.fillRect(s.x, s.y, s.z*1.8, s.z*1.8); }
+  ctx.globalAlpha = 1;
+  if (earthImg) ctx.drawImage(earthImg, earth.x - earthImg.width/2, earth.y - earthImg.height/2);
+  for (const m of meteors) drawMeteor(m, now);
+  for (let i=parts.length-1;i>=0;i--){ const q=parts[i]; q.age+=dt; if (q.age>q.life){ parts.splice(i,1); continue; } q.x+=q.vx*dt; q.y+=q.vy*dt; q.vx*=0.96; q.vy*=0.96; const a=1-q.age/q.life; ctx.fillStyle = q.hot ? `rgba(255,${180+q.age*60|0},90,${a})` : `rgba(140,110,90,${a})`; ctx.beginPath(); ctx.arc(q.x,q.y,q.size*(q.hot?a:1),0,Math.PI*2); ctx.fill(); }
+  for (let i=rings.length-1;i>=0;i--){ const r=rings[i]; r.age+=dt; if (r.age>r.life){ rings.splice(i,1); continue; } const k=r.age/r.life; ctx.strokeStyle=`rgba(${r.c},${1-k})`; ctx.lineWidth=4*(1-k)+1; ctx.beginPath(); ctx.arc(r.x,r.y,r.r*(1+k*2.2),0,Math.PI*2); ctx.stroke(); }
+  // calibration dot
+  if (state==="calib" && calib.active){
+    const [nx,ny] = calib.points[calib.idx], x=nx*W, y=ny*H, el = now - calib.t0;
+    const shrink = Math.max(0, 1 - el/SETTLE);
+    ctx.fillStyle = calib.phase==="cal" ? "#ffb347" : "#6ff0e0";
+    ctx.beginPath(); ctx.arc(x,y,7 + shrink*16,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#070b1c"; ctx.beginPath(); ctx.arc(x,y,2.5,0,Math.PI*2); ctx.fill();
+    if (el > SETTLE){ ctx.strokeStyle="rgba(255,255,255,.7)"; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,16,-Math.PI/2,-Math.PI/2+Math.min(1,(el-SETTLE)/COLLECT)*Math.PI*2); ctx.stroke(); }
+  }
+  // gaze marker
+  const g = gazePoint();
+  if (g && showGaze && (state==="play" || state==="result" || dbgOn)){
+    ctx.strokeStyle = "rgba(111,240,224,.55)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(g.x, g.y, mode==="eyes" ? Math.max(10, tracker.tol*0.5) : 14, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = "rgba(111,240,224,.9)"; ctx.beginPath(); ctx.arc(g.x, g.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- debug ----------
+let dbgOn = false;
+function dbg(){
+  if (!dbgOn) return;
+  const g = gazePoint(), f = tracker.feat;
+  $("debugPanel").textContent = [
+    `mode ${mode}  state ${state}  ${W}x${H}`,
+    mode==="eyes" ? `track ${tracker.fps.toFixed(0)} fps  ${tracker.ms.toFixed(1)} ms/frame  face ${f?"yes":"no"}` : "",
+    f ? `iris u ${f[0].toFixed(3)}  v ${f[1].toFixed(3)}  yaw ${(f[7]*57.3).toFixed(0)}°  pitch ${(f[8]*57.3).toFixed(0)}°` : "",
+    tracker.calErr!=null && mode==="eyes" ? `calib miss ${tracker.calErr.toFixed(0)}px jitter ${tracker.calJit.toFixed(0)}px  hit+${tracker.tol.toFixed(0)}px` : "",
+    g ? `gaze ${g.x.toFixed(0)}, ${g.y.toFixed(0)}` : "gaze ·",
+    `dwell S ${dwellFor("S")}s  M ${dwellFor("M")}s  L ${dwellFor("L")}s  XL ${dwellFor("XL")}s`,
+    ...meteors.map(m => `${m.size} r${m.r.toFixed(0)} ${m.prog.toFixed(2)}/${m.dwell.toFixed(2)}s`),
+    tracker.err ? "err " + tracker.err : ""
+  ].filter(Boolean).join("\n");
+}
+
+// ---------- loop ----------
+function frame(ms){
+  const now = ms/1000, dt = Math.min(0.05, lastT ? now-lastT : 0); lastT = now;
+  if (shake > 0) shake = Math.max(0, shake - dt);
+  if (state==="play") step(dt, now);
+  render(now, dt); dbg();
+  requestAnimationFrame(frame);
+}
+
+// ---------- screens ----------
+function showScreen(id){ for (const s of ["scrMenu","scrCalib","scrResult","scrPause","scrOver"]) $(s).hidden = s!==id; }
+function syncToggles(){
+  $("btnSound").textContent = t(soundOn ? "soundOn" : "soundOff");
+  $("btnGaze").textContent = t(showGaze ? "gazeOn" : "gazeOff");
+}
+function menuErr(msg){ const e=$("menuErr"); e.textContent = msg||""; e.hidden = !msg; }
+
+$("btnTouch").onclick = () => { audio(); mode = "touch"; $("cam").hidden = true; menuErr(""); newGame(); };
+$("btnEyes").onclick = async () => {
+  audio(); menuErr("");
+  showScreen("scrCalib"); $("btnCalibGo").disabled = true; $("calibStatus").textContent = t("loading");
+  try {
+    if (!video.srcObject) await startCamera();
+    $("cam").hidden = false;
+    if (!tracker.ready){ $("calibStatus").textContent = t("loadingModel"); await loadTracker(); }
+  } catch (e) {
+    showScreen("scrMenu"); $("cam").hidden = true;
+    menuErr(e.code ? t(e.code) : t("modelFail") + (e.message||e)); return;
+  }
+  mode = "eyes"; waitFace();
+};
+function waitFace(){
+  if ($("scrCalib").hidden) return;
+  const ok = !!tracker.feat;
+  $("calibStatus").textContent = t(ok ? "faceOk" : "faceNo"); $("btnCalibGo").disabled = !ok;
+  setTimeout(waitFace, 250);
+}
+$("btnCalibGo").onclick = startCalibration;
+$("btnCalibBack").onclick = () => { showScreen("scrMenu"); };
+$("btnPlay").onclick = newGame;
+$("btnRecal2").onclick = startCalibration;
+$("btnRecal").onclick = () => { meteors = []; startCalibration(); };
+$("btnPause").onclick = () => { if (state!=="play") return; state = "paused"; setHum(0); showScreen("scrPause"); };
+$("btnResume").onclick = () => { state = "play"; showScreen(null); };
+$("btnQuit").onclick = $("btnMenu").onclick = () => { state = "menu"; meteors = []; setHum(0); toast(""); $("hud").hidden = true; showScreen("scrMenu"); };
+$("btnAgain").onclick = newGame;
+$("btnSound").onclick = () => { soundOn = !soundOn; syncToggles(); };
+$("btnGaze").onclick = () => { showGaze = !showGaze; syncToggles(); };
+$("btnDbg").onclick = () => { dbgOn = !dbgOn; $("debugPanel").hidden = !dbgOn; $("btnDbg").setAttribute("aria-pressed", dbgOn); };
+for (const L of ["ru","en"]) $("lang-"+L).onclick = () => { lang = L; try { localStorage.setItem("spanther.lang", L); } catch {} applyLang(); };
+document.addEventListener("visibilitychange", () => { if (document.hidden && state==="play") $("btnPause").onclick(); });
+
+window.addEventListener("resize", resize);
+// test hooks
+window.__spanther = { log:[], get meteors(){ return meteors; }, get state(){ return state; }, dwellFor, radiusFor, fitRidge, predict, spawn: (size) => { spawn(); if (size){ const m = meteors[meteors.length-1]; m.size=size; m.r=radiusFor(size); m.dwell=dwellFor(size);} return meteors[meteors.length-1]; } };
+
+resize(); applyLang();
+requestAnimationFrame(frame); requestAnimationFrame(trackLoop);
+})();
+</script>
+</body>
+</html>
