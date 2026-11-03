@@ -240,6 +240,7 @@ final class GameModelTests: XCTestCase {
         var t = 0.0
         while ended == nil && t < 120 {
             let target = m.asteroids.max { $0.position.y < $1.position.y }
+            if m.starved { m.reload() }   // the bot blinks three times as soon as it runs dry
             for e in m.update(dt: 1.0 / 60, gaze: target.map { .point($0.position) } ?? .notLooking) {
                 if case let .levelEnded(level, ratio, next) = e { ended = (level, ratio, next) }
             }
@@ -248,5 +249,159 @@ final class GameModelTests: XCTestCase {
         let e = try XCTUnwrap(ended)
         XCTAssertGreaterThanOrEqual(e.1, 0.9)
         XCTAssertEqual(e.2, 2)
+    }
+}
+
+final class EnergyTests: XCTestCase {
+    let screen = Vec2(390, 844)
+
+    func testBalanceJsonHasEnergyDefaults() throws {
+        let e = try XCTUnwrap(try BalanceTests.config().energy)
+        XCTAssertEqual(e.max, 10)
+        XCTAssertEqual(e.cost("S"), 1); XCTAssertEqual(e.cost("M"), 2); XCTAssertEqual(e.cost("L"), 3); XCTAssertEqual(e.cost("XL"), 5)
+        XCTAssertEqual(e.reloadBlinks, 3)
+        XCTAssertEqual(e.reloadWindowSec, 2.0)
+    }
+
+    func testPartialEnergyJsonKeepsDefaults() throws {
+        let e = try JSONDecoder().decode(EnergyConfig.self, from: Data(#"{"max": 6, "blink": {"closeThreshold": 0.7}}"#.utf8))
+        XCTAssertEqual(e.max, 6)
+        XCTAssertEqual(e.cost("XL"), 5)
+        XCTAssertEqual(e.blink.closeThreshold, 0.7)
+        XCTAssertEqual(e.blink.openThreshold, 0.35)
+    }
+
+    func testBurstNeedsAllPressesInsideWindow() {
+        var b = BurstCounter(count: 3, windowSec: 2)
+        XCTAssertFalse(b.press(at: 0)); XCTAssertFalse(b.press(at: 1.0)); XCTAssertTrue(b.press(at: 1.9))
+        XCTAssertEqual(b.pending(at: 2), 0, "starts over after a burst")
+        XCTAssertFalse(b.press(at: 10)); XCTAssertFalse(b.press(at: 11.5)); XCTAssertFalse(b.press(at: 12.6), "first press fell out of the window")
+        XCTAssertTrue(b.press(at: 13.0))
+    }
+
+    /// Feeds a 60 Hz eye-closure curve: open, then closed for each (start, duration) blink. Returns all updates.
+    func run(_ d: inout BlinkDetector, blinks: [(Double, Double)], until end: Double, closed: Double = 0.9) -> [(Double, BlinkUpdate)] {
+        var out: [(Double, BlinkUpdate)] = []
+        var t = 0.0
+        while t < end {
+            let shut = blinks.contains { t >= $0.0 && t < $0.0 + $0.1 }
+            out.append((t, d.update(time: t, left: shut ? closed : 0.05, right: shut ? closed : 0.08)))
+            t += 1.0 / 60
+        }
+        return out
+    }
+
+    func testThreeQuickBlinksReload() {
+        var d = BlinkDetector(EnergyConfig())
+        let u = run(&d, blinks: [(0.5, 0.15), (0.9, 0.15), (1.3, 0.15)], until: 2)
+        XCTAssertEqual(u.filter { $0.1.blinkEnded != nil }.count, 3)
+        XCTAssertEqual(u.filter { $0.1.reload }.count, 1)
+        let reloadAt = u.first { $0.1.reload }!.0
+        XCTAssertEqual(reloadAt, 1.45, accuracy: 0.03, "fires when the third blink ends")
+    }
+
+    func testNaturalBlinksDoNotReload() {
+        var d = BlinkDetector(EnergyConfig())
+        // Kids blink roughly every 3-5 s.
+        let u = run(&d, blinks: [(0.5, 0.15), (3.5, 0.12), (7, 0.18), (10.5, 0.15)], until: 12)
+        XCTAssertEqual(u.filter { $0.1.blinkEnded != nil }.count, 4)
+        XCTAssertFalse(u.contains { $0.1.reload })
+    }
+
+    func testOneFrameSpikeAndLongClosureAreNotBlinks() {
+        var d = BlinkDetector(EnergyConfig())
+        // 1 frame glitch, then two blinks, then eyes shut for a second (resets), then one more blink.
+        let u = run(&d, blinks: [(0.3, 0.01), (0.6, 0.15), (1.0, 0.15), (1.4, 1.0), (2.6, 0.15)], until: 3.2)
+        XCTAssertEqual(u.filter { $0.1.blinkEnded != nil }.count, 3)
+        XCTAssertFalse(u.contains { $0.1.reload }, "long closure cleared the two blinks before it")
+    }
+
+    func testSquintIsNotABlinkButFreezesGaze() {
+        var d = BlinkDetector(EnergyConfig())
+        let u = run(&d, blinks: [(0.5, 0.3)], until: 1.2, closed: 0.45)
+        XCTAssertFalse(u.contains { $0.1.blinkEnded != nil })
+        XCTAssertTrue(u.contains { $0.1.freezeGaze })
+    }
+
+    func testGazeFreezeCoversBlinkPlusSettleTime() {
+        var d = BlinkDetector(EnergyConfig())
+        let u = run(&d, blinks: [(0.5, 0.15)], until: 1.0)
+        let frozen = u.filter { $0.1.freezeGaze }.map { $0.0 }
+        XCTAssertEqual(frozen.first ?? -1, 0.5, accuracy: 0.02)
+        XCTAssertEqual(frozen.last ?? -1, 0.65 + 0.08, accuracy: 0.03, "holds 80 ms after the eyes open")
+        XCTAssertFalse(u.first { $0.0 > 0.8 }!.1.freezeGaze)
+    }
+
+    func parked(_ m: GameModel, _ cls: String, at p: Vec2) -> Asteroid {
+        var a = m.spawn(className: cls); a.position = p; a.velocity = .zero; m.insert(a); return a
+    }
+
+    func testKillSpendsEnergyByClass() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 11)
+        XCTAssertEqual(m.energy, 10)
+        _ = parked(m, "L", at: Vec2(195, 300))
+        var spent: [Int] = []
+        for _ in 0..<90 {
+            for e in m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) { if case .energySpent(let c, _) = e { spent.append(c) } }
+        }
+        XCTAssertEqual(spent, [3])
+        XCTAssertEqual(m.energy, 7)
+    }
+
+    func testEmptyPoolBlocksUntilReload() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 12)
+        // Two XL kills empty the pool.
+        for _ in 0..<2 {
+            _ = parked(m, "XL", at: Vec2(195, 300))
+            for _ in 0..<130 { m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        }
+        XCTAssertEqual(m.energy, 0)
+        let s = parked(m, "S", at: Vec2(195, 300))
+        var events: [GameEvent] = []
+        for _ in 0..<60 { events += m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        XCTAssertTrue(m.starved)
+        XCTAssertTrue(events.contains { if case .starved(true) = $0 { return true }; return false })
+        let rock = try XCTUnwrap(m.asteroids.first { $0.id == s.id })
+        XCTAssertEqual(rock.progress, 0)
+        XCTAssertTrue(rock.isStarved)
+
+        XCTAssertTrue(m.reload())
+        XCTAssertEqual(m.energy, 10)
+        XCTAssertFalse(m.reload(), "already full")
+        for _ in 0..<32 { m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        XCTAssertNil(m.asteroids.first { $0.id == s.id }, "destroyed after the reload")
+        XCTAssertFalse(m.starved)
+        XCTAssertEqual(m.energy, 9)
+    }
+
+    func testCannotAffordBigButCanAffordSmall() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 13)
+        _ = parked(m, "XL", at: Vec2(195, 300))
+        for _ in 0..<130 { m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        _ = parked(m, "L", at: Vec2(195, 300))
+        for _ in 0..<80 { m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        XCTAssertEqual(m.energy, 2)
+        let xl = parked(m, "XL", at: Vec2(100, 200))
+        m.update(dt: 0.2, gaze: .point(Vec2(100, 200)))
+        XCTAssertTrue(m.starved)
+        XCTAssertEqual(m.asteroids.first { $0.id == xl.id }!.progress, 0)
+        m.removeAll()
+        _ = parked(m, "M", at: Vec2(100, 200))
+        m.update(dt: 0.2, gaze: .point(Vec2(100, 200)))
+        XCTAssertFalse(m.starved)
+        XCTAssertGreaterThan(m.asteroids[0].progress, 0)
+    }
+
+    func testNoEnergyConfigMeansNoLimit() throws {
+        var c = try BalanceTests.config()
+        c.energy = nil
+        let m = GameModel(config: c, screen: screen, marginPt: 30, seed: 14)
+        for _ in 0..<4 {
+            m.removeAll()   // drop natural spawns so only the parked XL is under the gaze
+            _ = parked(m, "XL", at: Vec2(195, 300))
+            for _ in 0..<130 { m.update(dt: 1.0 / 60, gaze: .point(Vec2(195, 300))) }
+        }
+        XCTAssertEqual(m.destroyedThisLevel, 4, "20 energy worth of XL with no pool")
+        XCTAssertFalse(m.starved)
     }
 }

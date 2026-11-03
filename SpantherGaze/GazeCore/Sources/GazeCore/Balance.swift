@@ -44,6 +44,8 @@ public struct BalanceConfig: Codable, Sendable {
     public var adaptation: Adaptation?
     /// Freeze the game when the face has been lost this long (prototype addition, not in BALANCE.md).
     public var pauseWhenFaceLostSec: Double?
+    /// Energy pool spent on kills and refilled by 3 blinks. nil turns the mechanic off (original BALANCE.md rules).
+    public var energy: EnergyConfig?
 
     public static let classOrder = ["S", "M", "L", "XL"]
 

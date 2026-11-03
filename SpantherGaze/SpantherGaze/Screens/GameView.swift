@@ -12,7 +12,8 @@ struct GameView: View {
                 if let scene {
                     SpriteView(scene: scene, options: [.ignoresSiblingOrder])
                     HUDView(hud: scene.hud, paused: $paused, onQuit: { app.route = .menu }, onRecalibrate: { app.beginCalibration() },
-                            canRecalibrate: app.mode == .eyes)
+                            canRecalibrate: app.mode == .eyes, touchMode: app.mode == .touch,
+                            onEnergyTap: { [weak scene] in scene?.reloadTap() })
                 }
             }
             .onAppear { if scene == nil { scene = makeScene(size: geo.size) } }
@@ -30,6 +31,9 @@ struct GameView: View {
         let model = app
         s.gazeSource = { [weak model] in model?.gaze ?? .lost }
         s.onRecord = { [weak model] r in model?.log(r) }
+        s.blinkReload = { [weak model] in model?.consumeBlinkReload() ?? false }
+        s.pendingBlinks = { [weak model] in model?.pendingBlinks ?? 0 }
+        s.onEnergyEvent = { [weak model] kind, e in model?.logEnergy(kind: kind, energy: e) }
         return s
     }
 }
@@ -40,10 +44,12 @@ private struct HUDView: View {
     let onQuit: () -> Void
     let onRecalibrate: () -> Void
     let canRecalibrate: Bool
+    let touchMode: Bool
+    let onEnergyTap: () -> Void
 
     var body: some View {
         ZStack {
-            VStack {
+            VStack(spacing: 10) {
                 HStack(spacing: 8) {
                     pill { Text("\(hud.score)").monospacedDigit() }
                     pill {
@@ -61,7 +67,16 @@ private struct HUDView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 54)
+                if hud.energyMax > 0 {
+                    EnergyBar(energy: hud.energy, max: hud.energyMax, reloadProgress: hud.reloadProgress,
+                              needsReload: hud.needsReload, pulse: hud.reloadCount, touchMode: touchMode, onTap: onEnergyTap)
+                        .padding(.horizontal, 14)
+                }
                 Spacer()
+                if hud.needsReload && !paused && !hud.lookBack {
+                    ReloadHint(touchMode: touchMode, progress: hud.reloadProgress)
+                        .padding(.bottom, 150)
+                }
             }
             if let b = hud.banner {
                 Text(b).font(.title3.bold()).padding(14)
@@ -92,5 +107,68 @@ private struct HUDView: View {
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(.black.opacity(0.45), in: Capsule())
             .foregroundStyle(.white)
+    }
+}
+
+/// Energy pool as segments. In touch mode the whole bar is the reload button (3 taps).
+private struct EnergyBar: View {
+    let energy: Int
+    let max: Int
+    let reloadProgress: Int
+    let needsReload: Bool
+    let pulse: Int
+    let touchMode: Bool
+    let onTap: () -> Void
+    @State private var glow = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.fill")
+                .foregroundStyle(energy > 0 ? Palette.gaze : Palette.hot)
+            HStack(spacing: 3) {
+                ForEach(0..<max, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(i < energy ? Palette.gaze : Palette.dim.opacity(0.18))
+                        .frame(height: 14)
+                }
+            }
+            Text("\(energy)").font(.subheadline.bold()).monospacedDigit().foregroundStyle(.white)
+                .frame(minWidth: 22, alignment: .trailing)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(.black.opacity(0.45), in: Capsule())
+        .overlay(Capsule().stroke(needsReload ? Palette.hot : Palette.gaze.opacity(glow ? 0.9 : 0), lineWidth: 2))
+        .scaleEffect(glow ? 1.04 : 1)
+        .contentShape(Capsule())
+        .onTapGesture { if touchMode { onTap() } }
+        .accessibilityLabel("Энергия \(energy) из \(max)")
+        .onChange(of: pulse) { _ in
+            withAnimation(.easeOut(duration: 0.15)) { glow = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { withAnimation(.easeIn(duration: 0.3)) { glow = false } }
+        }
+    }
+}
+
+/// "Blink 3 times" with three dots that fill as blinks (or taps) are counted.
+private struct ReloadHint: View {
+    let touchMode: Bool
+    let progress: Int
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(touchMode ? "Нажми на энергию 3 раза" : "Моргни 3 раза").font(.title3.bold())
+            HStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { i in
+                    Image(systemName: touchMode ? "hand.tap.fill" : (i < progress ? "eye.slash.fill" : "eye.fill"))
+                        .foregroundStyle(i < progress ? Palette.gaze : Palette.dim.opacity(0.6))
+                }
+            }
+            .font(.title2)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18).padding(.vertical, 12)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.hot.opacity(0.7), lineWidth: 1.5))
+        .allowsHitTesting(false)
     }
 }

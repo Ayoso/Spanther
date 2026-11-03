@@ -6,6 +6,8 @@ struct TrackingSample {
     var timestamp: Double
     /// nil when no face is tracked this frame.
     var features: GazeFeatures?
+    /// ARKit eyeBlinkLeft / eyeBlinkRight blend shapes, 0 open ... 1 closed. nil when no face.
+    var blink: (left: Double, right: Double)?
     var processingMs: Double
     var fps: Double
 }
@@ -52,7 +54,7 @@ final class FaceTracker: NSObject, ARSessionDelegate {
         if t0 - fpsWindowStart >= 1 { fps = Double(fpsFrames) / (t0 - fpsWindowStart); fpsFrames = 0; fpsWindowStart = t0 }
 
         guard let face = frame.anchors.compactMap({ $0 as? ARFaceAnchor }).first, face.isTracked else {
-            deliver(TrackingSample(timestamp: frame.timestamp, features: nil, processingMs: 0, fps: fps))
+            deliver(TrackingSample(timestamp: frame.timestamp, features: nil, blink: nil, processingMs: 0, fps: fps))
             return
         }
 
@@ -88,16 +90,18 @@ final class FaceTracker: NSObject, ARSessionDelegate {
             cameraTransform: Mat4(frame.camera.transform),
             pupils: pupils)
         let features = GazeFeatures.make(ff)
-        deliver(TrackingSample(timestamp: frame.timestamp, features: features,
+        let blink = (left: face.blendShapes[.eyeBlinkLeft]?.doubleValue ?? 0,
+                     right: face.blendShapes[.eyeBlinkRight]?.doubleValue ?? 0)
+        deliver(TrackingSample(timestamp: frame.timestamp, features: features, blink: blink,
                                processingMs: (CACurrentMediaTime() - t0) * 1000, fps: fps))
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
-        deliver(TrackingSample(timestamp: CACurrentMediaTime(), features: nil, processingMs: 0, fps: 0))
+        deliver(TrackingSample(timestamp: CACurrentMediaTime(), features: nil, blink: nil, processingMs: 0, fps: 0))
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
-        deliver(TrackingSample(timestamp: CACurrentMediaTime(), features: nil, processingMs: 0, fps: 0))
+        deliver(TrackingSample(timestamp: CACurrentMediaTime(), features: nil, blink: nil, processingMs: 0, fps: 0))
     }
 
     private func deliver(_ s: TrackingSample) {

@@ -34,6 +34,10 @@ struct DebugOverlay: View {
                 l.append("pupil –")
             }
         }
+        if let b = status.blink {
+            l.append(String(format: "blink L %.2f R %.2f  %@  count %d  reload %d/3", b.left, b.right,
+                            status.gazeFrozen ? "HOLD" : "    ", status.blinksTotal, status.pendingBlinks))
+        }
         if let g = status.gaze { l.append(String(format: "gaze %.0f, %.0f pt", g.x, g.y)) }
         return l
     }
