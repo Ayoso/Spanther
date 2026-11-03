@@ -4,6 +4,15 @@ struct MenuView: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
+        // The smallest screens (iPhone SE, 4.7") cannot fit the whole menu with a warning on it: there it
+        // scrolls instead of clipping the title and the footer.
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView { content }
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 22) {
             Spacer()
             Text("SPANTHER")
@@ -32,6 +41,7 @@ struct MenuView: View {
                 VStack(spacing: 8) {
                     Text("Нет доступа к камере, поэтому игра не видит взгляд. Разреши камеру в настройках и открой игру заново.")
                         .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button("Открыть настройки") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
