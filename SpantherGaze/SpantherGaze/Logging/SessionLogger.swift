@@ -35,10 +35,12 @@ final class SessionLogger {
         write(cells.joined(separator: ","))
     }
 
-    /// A blink (`blink`, with its closed time), a reload (`reload`, energy after it) or a kill's spend (`energy`).
-    /// Blink rows let the thresholds be tuned on recorded sessions (CLAUDE.md rule 7).
-    func event(kind: String, time: Double, blinkSec: Double? = nil, energy: Int? = nil) {
-        let cells: [String] = [kind, fmt(time)] + Array(repeating: "", count: 20)
+    /// A blink (`blink`, with its closed time) or a game event (`energy` per kill, `reload`, `level`, `restart`,
+    /// with the energy after it and the level). Blink rows let the thresholds be tuned on recorded sessions
+    /// (CLAUDE.md rule 7); level rows explain the pool refills at each new level.
+    func event(kind: String, time: Double, blinkSec: Double? = nil, energy: Int? = nil, level: Int? = nil) {
+        let cells: [String] = [kind, fmt(time)] + Array(repeating: "", count: 15)
+            + [level.map { "\($0)" } ?? "", "", "", "", ""]
             + [blinkSec.map(fmt) ?? "", energy.map { "\($0)" } ?? "", "", "", ""]
         write(cells.joined(separator: ","))
     }

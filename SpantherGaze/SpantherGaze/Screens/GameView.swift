@@ -36,7 +36,7 @@ struct GameView: View {
         s.onRecord = { [weak model] r in model?.log(r) }
         s.blinkReload = { [weak model] in model?.consumeBlinkReload() ?? false }
         s.pendingBlinks = { [weak model] in model?.pendingBlinks ?? 0 }
-        s.onEnergyEvent = { [weak model] kind, e in model?.logEnergy(kind: kind, energy: e) }
+        s.onGameEvent = { [weak model] kind, energy, level in model?.logGameEvent(kind: kind, energy: energy, level: level) }
         return s
     }
 }

@@ -10,9 +10,10 @@ struct MenuView: View {
                 .font(.system(size: 46, weight: .black, design: .rounded))
                 .tracking(4)
                 .foregroundStyle(LinearGradient(colors: [.white, Palette.fire], startPoint: .top, endPoint: .bottom))
-            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся.")
+            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся. Кончилась энергия? Моргни 3 раза.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Palette.dim)
+                .fixedSize(horizontal: false, vertical: true)
             sizes
             VStack(spacing: 12) {
                 Button {

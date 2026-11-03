@@ -160,7 +160,9 @@ final class AppModel: ObservableObject {
     /// Blinks counted so far toward the next reload, for the HUD.
     var pendingBlinks: Int { blinkDetector.pendingBlinks(at: lastSampleTime) }
 
-    func logEnergy(kind: String, energy: Int) { logger.event(kind: kind, time: CACurrentMediaTime(), energy: energy) }
+    func logGameEvent(kind: String, energy: Int, level: Int) {
+        logger.event(kind: kind, time: CACurrentMediaTime(), energy: energy, level: level)
+    }
 
     var gazePoint: Vec2? { if case .point(let p) = gaze { return p }; return nil }
 

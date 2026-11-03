@@ -30,7 +30,9 @@ final class GameScene: SKScene {
     var blinkReload: () -> Bool = { false }
     /// Blinks counted toward the next reload, for the HUD.
     var pendingBlinks: () -> Int = { 0 }
-    var onEnergyEvent: ((String, Int) -> Void)?
+    /// CSV event rows: kind ("energy" per kill, "reload", "level" for a new level, "restart" when shields ran
+    /// out), the energy left after it, and the level it happened on.
+    var onGameEvent: ((_ kind: String, _ energy: Int, _ level: Int) -> Void)?
     let hud = GameHUD()
     var paused_ = false
 
@@ -110,7 +112,7 @@ final class GameScene: SKScene {
         hitHaptic.notificationOccurred(.success)
         hud.energy = m.energy
         hud.reloadCount += 1
-        onEnergyEvent?("reload", m.energy)
+        onGameEvent?("reload", m.energy, m.level)
         let wave = SKShapeNode(circleOfRadius: 30)
         wave.position = CGPoint(x: size.width / 2, y: size.height - 120)
         wave.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 1)
@@ -167,7 +169,7 @@ final class GameScene: SKScene {
                 onRecord?(rec)
             case .energySpent(_, let left):
                 hud.energy = left
-                onEnergyEvent?("energy", left)
+                onGameEvent?("energy", left, m.level)
             case .starved:
                 break
             case .hitEarth(let a, let rec):
@@ -180,10 +182,12 @@ final class GameScene: SKScene {
                 rocks.removeAll()
                 hud.shields = m.shields
                 hud.energy = m.energy
+                onGameEvent?("restart", m.energy, lvl)
                 flash("Щиты кончились. Уровень \(lvl) ещё раз")
             case .levelEnded(_, let ratio, let next):
                 hud.level = next
                 hud.energy = m.energy
+                onGameEvent?("level", m.energy, next)
                 flash(String(format: "Сбито %.0f%% · Уровень %d", ratio * 100, next))
             case .pausedForFace(let on):
                 hud.lookBack = on
@@ -207,7 +211,8 @@ final class GameScene: SKScene {
     /// Looks at the lowest meteor, even one it cannot afford (so the red ring and hint show). Two seconds
     /// after running dry it "blinks" (eyes) or taps the energy bar (touch) every 0.4 s until it reloads.
     private func botStep(_ m: GameModel) -> GazeInput {
-        let target = m.asteroids.filter { $0.position.y > 0 }.max { $0.position.y < $1.position.y }
+        // Like a player: reacts once a meteor is well into view (a third of the way down), then follows the lowest.
+        let target = m.asteroids.filter { $0.position.y > m.screen.y * 0.33 }.max { $0.position.y < $1.position.y }
         if m.needsReload {
             if botDrySince == nil { botDrySince = m.time; botBlinks = 0 }
             if m.time - (botDrySince ?? m.time) > 2, m.time >= botNextPress {
