@@ -37,7 +37,9 @@
     "blink": {
       "closeThreshold": 0.6, "openThreshold": 0.35,
       "minClosedSec": 0.05, "maxClosedSec": 0.5,
-      "freezeThreshold": 0.35, "holdAfterOpenSec": 0.08
+      "closeRise": 0.3, "openRise": 0.15, "freezeRise": 0.2,
+      "baselineWindowSec": 0.8, "baselineCap": 0.5,
+      "freezeThreshold": 0.35, "holdAfterOpenSec": 0.08, "maxLidHoldSec": 0.3
     }
   }
 }

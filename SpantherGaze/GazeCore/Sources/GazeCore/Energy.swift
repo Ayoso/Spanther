@@ -3,11 +3,23 @@ import Foundation
 /// Energy pool and 3-blink reload numbers. Lives in balance.json under "energy".
 public struct EnergyConfig: Codable, Sendable {
     /// Blink detection on ARKit `eyeBlinkLeft` / `eyeBlinkRight` blend shapes (0 open ... 1 closed).
+    /// Each threshold is the larger of a fixed value and "this eye's open level + a rise", because the lid
+    /// drops (and eyeBlink grows) when the player looks down toward Earth, where it matters most.
     public struct Blink: Codable, Sendable {
         /// Both eyes at or above this value count as closed.
         public var closeThreshold: Double = 0.6
         /// Both eyes below this value count as open again (hysteresis).
         public var openThreshold: Double = 0.35
+        /// Rises above the eye's open level for closed / open / freeze.
+        public var closeRise: Double = 0.3
+        public var openRise: Double = 0.15
+        public var freezeRise: Double = 0.2
+        /// The open level is the lowest value of each eye over this window (longer than any blink)...
+        public var baselineWindowSec: Double = 0.8
+        /// ...but never above this, so eyes held shut do not become the new "open".
+        public var baselineCap: Double = 0.5
+        /// Lids lowered this long without closing is a look down or a squint, not a blink: stop holding the gaze.
+        public var maxLidHoldSec: Double = 0.3
         /// Shorter closures are noise (one bad frame), not a blink.
         public var minClosedSec: Double = 0.05
         /// Longer closures are "eyes shut", not a blink, and reset the reload count.
@@ -25,6 +37,12 @@ public struct EnergyConfig: Codable, Sendable {
             openThreshold = try c.decodeIfPresent(Double.self, forKey: .openThreshold) ?? openThreshold
             minClosedSec = try c.decodeIfPresent(Double.self, forKey: .minClosedSec) ?? minClosedSec
             maxClosedSec = try c.decodeIfPresent(Double.self, forKey: .maxClosedSec) ?? maxClosedSec
+            closeRise = try c.decodeIfPresent(Double.self, forKey: .closeRise) ?? closeRise
+            openRise = try c.decodeIfPresent(Double.self, forKey: .openRise) ?? openRise
+            freezeRise = try c.decodeIfPresent(Double.self, forKey: .freezeRise) ?? freezeRise
+            baselineWindowSec = try c.decodeIfPresent(Double.self, forKey: .baselineWindowSec) ?? baselineWindowSec
+            baselineCap = try c.decodeIfPresent(Double.self, forKey: .baselineCap) ?? baselineCap
+            maxLidHoldSec = try c.decodeIfPresent(Double.self, forKey: .maxLidHoldSec) ?? maxLidHoldSec
             freezeThreshold = try c.decodeIfPresent(Double.self, forKey: .freezeThreshold) ?? freezeThreshold
             holdAfterOpenSec = try c.decodeIfPresent(Double.self, forKey: .holdAfterOpenSec) ?? holdAfterOpenSec
         }
@@ -100,6 +118,8 @@ public struct BlinkDetector: Sendable {
     public private(set) var eyesClosed = false
     private var closedSince: Double?
     private var lastFreezeTime: Double?
+    private var history: [(time: Double, left: Double, right: Double)] = []
+    private var lidMovingSince: Double?
 
     public init(_ energy: EnergyConfig) {
         config = energy.blink
@@ -109,17 +129,31 @@ public struct BlinkDetector: Sendable {
     /// How long the eyes have been shut at `time` (0 when open).
     public func closedFor(at time: Double) -> Double { closedSince.map { time - $0 } ?? 0 }
 
+    /// Open level of each eye right now (0 open ... 1 closed), for the debug overlay.
+    public func openLevel() -> (left: Double, right: Double) {
+        let l = history.map(\.left).min() ?? 0, r = history.map(\.right).min() ?? 0
+        return (Swift.min(l, config.baselineCap), Swift.min(r, config.baselineCap))
+    }
+
     /// `left` / `right`: eye closure 0...1 (ARKit eyeBlinkLeft / eyeBlinkRight). `time` in seconds.
     public mutating func update(time: Double, left: Double, right: Double) -> BlinkUpdate {
         var ended: Double?
         var reload = false
-        let both = Swift.min(left, right)
-        let either = Swift.max(left, right)
+        history.removeAll { time - $0.time > config.baselineWindowSec }
+        history.append((time, left, right))
+        let base = openLevel()
+        func over(_ v: Double, _ fixed: Double, _ rise: Double, _ b: Double) -> Bool { v >= Swift.max(fixed, b + rise) }
+        let leftDown = over(left, config.closeThreshold, config.closeRise, base.left)
+        let rightDown = over(right, config.closeThreshold, config.closeRise, base.right)
+        let leftUp = !over(left, config.openThreshold, config.openRise, base.left)
+        let rightUp = !over(right, config.openThreshold, config.openRise, base.right)
+        let lidMoving = over(left, config.freezeThreshold, config.freezeRise, base.left)
+            || over(right, config.freezeThreshold, config.freezeRise, base.right)
 
-        if !eyesClosed, both >= config.closeThreshold {
+        if !eyesClosed, leftDown && rightDown {
             eyesClosed = true
             closedSince = time
-        } else if eyesClosed, both < config.openThreshold {
+        } else if eyesClosed, leftUp || rightUp {
             eyesClosed = false
             let dur = time - (closedSince ?? time)
             closedSince = nil
@@ -131,7 +165,10 @@ public struct BlinkDetector: Sendable {
             }
         }
 
-        if either >= config.freezeThreshold || eyesClosed { lastFreezeTime = time }
+        // Hold while the eyes are shut, or while a lid is coming down, but only briefly if it never closes.
+        if lidMoving { if lidMovingSince == nil { lidMovingSince = time } } else { lidMovingSince = nil }
+        let lidHold = lidMovingSince.map { time - $0 <= config.maxLidHoldSec } ?? false
+        if eyesClosed || lidHold { lastFreezeTime = time }
         let freeze = lastFreezeTime.map { time - $0 <= config.holdAfterOpenSec } ?? false
         return BlinkUpdate(freezeGaze: freeze, eyesClosed: eyesClosed, blinkEnded: ended, reload: reload)
     }
@@ -143,5 +180,7 @@ public struct BlinkDetector: Sendable {
     public mutating func faceLost() {
         eyesClosed = false
         closedSince = nil
+        lidMovingSince = nil
+        history.removeAll()
     }
 }

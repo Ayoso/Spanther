@@ -332,6 +332,38 @@ final class EnergyTests: XCTestCase {
         XCTAssertFalse(u.first { $0.0 > 0.8 }!.1.freezeGaze)
     }
 
+    /// 60 Hz run of an arbitrary closure curve (same value for both eyes).
+    func run(_ d: inout BlinkDetector, until end: Double, _ f: (Double) -> Double) -> [(Double, BlinkUpdate)] {
+        var out: [(Double, BlinkUpdate)] = []
+        var t = 0.0
+        while t < end { out.append((t, d.update(time: t, left: f(t), right: f(t)))); t += 1.0 / 60 }
+        return out
+    }
+
+    func testLookingDownIsNotABlinkAndBlinksStillCountThere() {
+        // Looking at Earth lowers the lids: eyeBlink sits at 0.45 from t = 1 s. Then three blinks from that level.
+        var d = BlinkDetector(EnergyConfig())
+        let blinks = [3.0, 3.4, 3.8]
+        let u = run(&d, until: 5) { t in
+            if blinks.contains(where: { t >= $0 && t < $0 + 0.15 }) { return 0.95 }
+            return t < 1 ? 0.05 : 0.45
+        }
+        XCTAssertFalse(u.contains { $0.0 < 2.9 && $0.1.eyesClosed }, "a lowered lid is not a closed eye")
+        let held = u.filter { $0.0 > 1 && $0.0 < 2.9 && $0.1.freezeGaze }.map { $0.0 }
+        XCTAssertLessThanOrEqual((held.last ?? 1) - 1, 0.3 + 0.08 + 0.02, "gaze is held only briefly after looking down")
+        XCTAssertEqual(u.filter { $0.1.blinkEnded != nil }.count, 3, "blinks end even though the eyes reopen only to 0.45")
+        XCTAssertEqual(u.filter { $0.1.reload }.count, 1)
+    }
+
+    func testEyesHeldShutStayClosed() {
+        var d = BlinkDetector(EnergyConfig())
+        let u = run(&d, until: 3) { t in t >= 0.5 && t < 2.5 ? 0.9 : 0.05 }
+        XCTAssertTrue(u.filter { $0.0 > 0.6 && $0.0 < 2.45 }.allSatisfy { $0.1.eyesClosed && $0.1.freezeGaze },
+                      "the open level is capped, so shut eyes never become the new open")
+        XCTAssertFalse(u.contains { $0.1.blinkEnded != nil }, "two seconds shut is not a blink")
+        XCTAssertFalse(u.last!.1.eyesClosed)
+    }
+
     func parked(_ m: GameModel, _ cls: String, at p: Vec2) -> Asteroid {
         var a = m.spawn(className: cls); a.position = p; a.velocity = .zero; m.insert(a); return a
     }

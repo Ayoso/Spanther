@@ -20,6 +20,8 @@ final class TrackingStatus: ObservableObject {
     @Published var features: GazeFeatures?
     @Published var gaze: Vec2?
     @Published var blink: (left: Double, right: Double)?
+    /// Each eye's current open level, which the blink thresholds ride on.
+    @Published var blinkBase: (left: Double, right: Double) = (0, 0)
     @Published var gazeFrozen = false
     /// Blinks counted toward the next reload (0...2).
     @Published var pendingBlinks = 0
@@ -130,6 +132,7 @@ final class AppModel: ObservableObject {
             status.features = s.features
             status.gaze = gazePoint
             status.blink = s.blink
+            status.blinkBase = blinkDetector.openLevel()
             status.gazeFrozen = blink.freezeGaze
             status.pendingBlinks = blinkDetector.pendingBlinks(at: s.timestamp)
         }
