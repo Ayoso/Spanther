@@ -70,7 +70,6 @@ public struct EnergyConfig: Codable, Sendable {
     }
 
     public func cost(_ className: String) -> Int { costByClass[className] ?? 1 }
-    public var cheapestCost: Int { costByClass.values.min() ?? 1 }
 }
 
 /// Counts presses (blinks or taps) and fires when `count` of them land inside `windowSec`.

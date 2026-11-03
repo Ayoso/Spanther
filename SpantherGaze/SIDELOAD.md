@@ -4,9 +4,10 @@ A GitHub Actions macOS runner compiles the app (no signing), and Sideloadly on W
 
 ## 1. Get the unsigned .ipa
 
-1. The code lives in the GitHub repo `Ayoso/Spanther`. Every push to `main` runs **iOS build** (`.github/workflows/ios.yml`): GazeCore unit tests, then an unsigned Release build for iPhone.
+1. The code lives in the GitHub repo `Ayoso/Spanther`. Every push to `main` and every pull request runs **iOS build** (`.github/workflows/ios.yml`): GazeCore unit tests, an unsigned Release build for iPhone, and a Simulator smoke test.
 2. Open the repo on GitHub → **Actions** → the latest green **iOS build** run → **Artifacts** → download `SpantherGaze-unsigned-ipa` and unzip it. You get `SpantherGaze-unsigned.ipa`.
-   You can also start a build by hand with **Run workflow**.
+   To try a pull request before it is merged, use the **iOS build** run of that pull request (its **Checks** tab → **iOS build** → **Summary** → **Artifacts**). You can also start a build by hand with **Run workflow**.
+3. Screenshots of the latest Simulator run are on the `ci-screenshots` branch, so you can see the screens without a phone or a Mac.
 
 ## 2. Install with Sideloadly (Windows)
 

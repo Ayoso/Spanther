@@ -12,8 +12,9 @@ final class GameHUD: ObservableObject {
     @Published var energyMax = 0
     /// Looking at a meteor the pool cannot pay for, or the pool is empty: show the reload hint.
     @Published var needsReload = false
-    /// Blinks (or taps) counted toward the next reload, 0...2.
+    /// Blinks (or taps) counted toward the next reload, and how many a reload takes.
     @Published var reloadProgress = 0
+    @Published var reloadNeeded = 3
     /// Bumped on every reload so the HUD can pulse.
     @Published var reloadCount = 0
 }
@@ -42,6 +43,14 @@ final class GameScene: SKScene {
     private let boomHaptic = UIImpactFeedbackGenerator(style: .medium)
     private let hitHaptic = UINotificationFeedbackGenerator()
     private var tapBurst = BurstCounter(count: 3, windowSec: 2)
+
+    #if DEBUG
+    /// Bot for the Simulator smoke test (see AppModel.autoplay).
+    var autoplay = false
+    private var botDrySince: Double?
+    private var botNextPress = 0.0
+    private var botBlinks = 0
+    #endif
 
     override func didMove(to view: SKView) {
         backgroundColor = UIColor(red: 0.027, green: 0.043, blue: 0.11, alpha: 1)
@@ -81,7 +90,10 @@ final class GameScene: SKScene {
         world.addChild(reticle)
         hud.shields = m.shields; hud.level = m.level; hud.score = 0
         hud.energy = m.energy; hud.energyMax = m.energyMax
-        if let e = config.energy { tapBurst = BurstCounter(count: e.touchReloadTaps, windowSec: e.reloadWindowSec) }
+        if let e = config.energy {
+            tapBurst = BurstCounter(count: e.touchReloadTaps, windowSec: e.reloadWindowSec)
+            hud.reloadNeeded = useTouch ? e.touchReloadTaps : e.reloadBlinks
+        }
         _ = blinkReload()   // drop a reload blinked on the menu
     }
 
@@ -127,14 +139,20 @@ final class GameScene: SKScene {
         lastTime = currentTime
         let reloadBlinked = blinkReload()
         guard let m = model, !paused_ else { return }
-        if !useTouch {
-            if reloadBlinked { doReload(m) }
-            let pb = pendingBlinks()
-            if hud.reloadProgress != pb { hud.reloadProgress = pb }
-        } else if hud.reloadProgress > 0, tapBurst.pending(at: CACurrentMediaTime()) == 0 {
-            hud.reloadProgress = 0
+        var botGaze: GazeInput?
+        #if DEBUG
+        if autoplay { botGaze = botStep(m) }
+        #endif
+        if botGaze == nil {
+            if !useTouch {
+                if reloadBlinked { doReload(m) }
+                let pb = pendingBlinks()
+                if hud.reloadProgress != pb { hud.reloadProgress = pb }
+            } else if hud.reloadProgress > 0, tapBurst.pending(at: CACurrentMediaTime()) == 0 {
+                hud.reloadProgress = 0
+            }
         }
-        let gaze: GazeInput = useTouch ? (touchPoint.map { .point($0) } ?? .notLooking) : gazeSource()
+        let gaze: GazeInput = botGaze ?? (useTouch ? (touchPoint.map { .point($0) } ?? .notLooking) : gazeSource())
 
         for e in m.update(dt: dt, gaze: gaze) {
             switch e {
@@ -173,8 +191,7 @@ final class GameScene: SKScene {
         }
 
         for a in m.asteroids { rocks[a.id]?.sync(a, at: sk(a.position)) }
-        let needs = m.energyEnabled && (m.starved || m.energy < (config.energy?.cheapestCost ?? 1))
-        if hud.needsReload != needs { hud.needsReload = needs }
+        if hud.needsReload != m.needsReload { hud.needsReload = m.needsReload }
 
         if case .point(let p) = gaze {
             reticle.isHidden = false
@@ -185,6 +202,33 @@ final class GameScene: SKScene {
             reticle.isHidden = true
         }
     }
+
+    #if DEBUG
+    /// Looks at the lowest meteor, even one it cannot afford (so the red ring and hint show). Two seconds
+    /// after running dry it "blinks" (eyes) or taps the energy bar (touch) every 0.4 s until it reloads.
+    private func botStep(_ m: GameModel) -> GazeInput {
+        let target = m.asteroids.filter { $0.position.y > 0 }.max { $0.position.y < $1.position.y }
+        if m.needsReload {
+            if botDrySince == nil { botDrySince = m.time; botBlinks = 0 }
+            if m.time - (botDrySince ?? m.time) > 2, m.time >= botNextPress {
+                botNextPress = m.time + 0.4
+                if useTouch {
+                    reloadTap()
+                } else {
+                    botBlinks += 1
+                    hud.reloadProgress = botBlinks
+                    if botBlinks >= hud.reloadNeeded { botBlinks = 0; hud.reloadProgress = 0; doReload(m) }
+                }
+            }
+        } else {
+            botDrySince = nil
+            botBlinks = 0
+            if hud.reloadProgress != 0 { hud.reloadProgress = 0 }
+        }
+        touchPoint = useTouch ? target?.position : nil
+        return target.map { .point($0.position) } ?? .notLooking
+    }
+    #endif
 
     private func flash(_ s: String) {
         hud.banner = s
@@ -290,10 +334,15 @@ final class RockNode: SKNode {
     private static let gazeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.18)
     private static let starvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.75)
 
+    private var showsStarved = false
+
     func sync(_ a: Asteroid, at p: CGPoint) {
         position = p
         // Looked at without enough energy: a red ring that says "reload first".
-        track.strokeColor = a.isStarved ? Self.starvedColor : Self.gazeColor
+        if a.isStarved != showsStarved {
+            showsStarved = a.isStarved
+            track.strokeColor = a.isStarved ? Self.starvedColor : Self.gazeColor
+        }
         body.zRotation = CGFloat(a.rotation)
         let t = CGFloat(min(1, a.progress))
         body.fillColor = UIColor(red: 0.45 + 0.55 * t, green: 0.33 - 0.1 * t, blue: 0.24 - 0.12 * t, alpha: 1)

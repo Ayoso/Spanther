@@ -112,8 +112,20 @@ public final class GameModel {
         energy = config.energy?.max ?? 0
     }
 
-    /// Energy one kill of this asteroid costs (0 when the mechanic is off).
-    public func cost(_ a: Asteroid) -> Int { config.energy?.cost(a.className) ?? 0 }
+    /// Energy one kill of this asteroid costs (0 when the mechanic is off). Never more than a full pool,
+    /// so a mistuned balance.json cannot make a class impossible to kill.
+    public func cost(_ a: Asteroid) -> Int { cost(className: a.className) }
+    public func cost(className: String) -> Int {
+        guard let e = config.energy else { return 0 }
+        return min(e.cost(className), e.max)
+    }
+
+    /// Show the reload hint: looking at a meteor the pool cannot pay for, or not enough left for any class.
+    public var needsReload: Bool {
+        guard energyEnabled else { return false }
+        let cheapest = BalanceConfig.classOrder.map { cost(className: $0) }.min() ?? 1
+        return starved || energy < cheapest
+    }
 
     /// The 3-blink (or 3-tap) reload: fills the pool. Returns false when it was already full.
     @discardableResult
@@ -176,15 +188,19 @@ public final class GameModel {
             let looked = i == targetIndex
             a.isTargeted = looked
             a.isStarved = looked && nowStarved
-            let targeted = looked && !nowStarved
-            if targeted {
-                if a.firstLookTime == nil { a.firstLookTime = time }
+            // Reaction time counts the first look, whether or not there is energy to spend on it.
+            if looked && a.firstLookTime == nil { a.firstLookTime = time }
+            if looked && !nowStarved {
                 a.progress += dt / a.dwellSec
+            } else if looked {
+                // Looked at but unaffordable: progress waits for the reload. It does not drain, and it is
+                // not an attention slip, so the parent report stays about attention, not energy.
             } else if !freezeProgress && a.progress > 0 {
                 a.progress = max(0, a.progress - dt / config.decayToZeroSec)
                 if a.progress == 0 { a.slips += 1 }
             }
-            let speed = targeted ? 1 - brake : 1
+            // The gaze brake works with or without energy: slowing the meteor buys time to reload.
+            let speed = looked ? 1 - brake : 1
             a.position = a.position + a.velocity * (dt * speed)
             a.rotation += dt * 0.6
 

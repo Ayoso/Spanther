@@ -28,6 +28,9 @@ struct GameView: View {
         s.config = app.balance
         s.marginPt = app.hitMarginPt
         s.useTouch = app.mode == .touch
+        #if DEBUG
+        s.autoplay = app.autoplay != nil
+        #endif
         let model = app
         s.gazeSource = { [weak model] in model?.gaze ?? .lost }
         s.onRecord = { [weak model] r in model?.log(r) }
@@ -74,7 +77,7 @@ private struct HUDView: View {
                 }
                 Spacer()
                 if hud.needsReload && !paused && !hud.lookBack {
-                    ReloadHint(touchMode: touchMode, progress: hud.reloadProgress)
+                    ReloadHint(touchMode: touchMode, progress: hud.reloadProgress, needed: hud.reloadNeeded)
                         .padding(.bottom, 150)
                 }
             }
@@ -149,16 +152,23 @@ private struct EnergyBar: View {
     }
 }
 
-/// "Blink 3 times" with three dots that fill as blinks (or taps) are counted.
+/// "Blink 3 times" with one icon per blink (or tap) that lights up as they are counted.
 private struct ReloadHint: View {
     let touchMode: Bool
     let progress: Int
+    let needed: Int
+
+    /// 2, 3, 4, 22... раза; 5...20, 25... раз.
+    private var times: String {
+        let n = needed % 100
+        return (2...4).contains(n % 10) && !(12...14).contains(n) ? "\(needed) раза" : "\(needed) раз"
+    }
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(touchMode ? "Нажми на энергию 3 раза" : "Моргни 3 раза").font(.title3.bold())
+            Text(touchMode ? "Нажми на энергию \(times)" : "Моргни \(times)").font(.title3.bold())
             HStack(spacing: 10) {
-                ForEach(0..<3, id: \.self) { i in
+                ForEach(0..<needed, id: \.self) { i in
                     Image(systemName: touchMode ? "hand.tap.fill" : (i < progress ? "eye.slash.fill" : "eye.fill"))
                         .foregroundStyle(i < progress ? Palette.gaze : Palette.dim.opacity(0.6))
                 }

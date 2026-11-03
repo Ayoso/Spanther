@@ -25,6 +25,7 @@ final class TrackingStatus: ObservableObject {
     @Published var gazeFrozen = false
     /// Blinks counted toward the next reload (0...2).
     @Published var pendingBlinks = 0
+    @Published var reloadBlinksNeeded = 3
     @Published var blinksTotal = 0
 }
 
@@ -71,7 +72,13 @@ final class AppModel: ObservableObject {
         }
         balance = cfg
         blinkDetector = BlinkDetector(cfg.energy ?? EnergyConfig())
+        status.reloadBlinksNeeded = (cfg.energy ?? EnergyConfig()).reloadBlinks
         if !FaceTracker.isSupported { mode = .touch }
+        if let bot = autoplay {
+            // CI smoke test in the Simulator: skip the menu and let the bot play.
+            mode = bot == "eyes" ? .eyes : .touch
+            route = .game
+        }
         tracker.onSample = { [weak self] s in self?.handle(s) }
     }
 
@@ -119,10 +126,14 @@ final class AppModel: ObservableObject {
                 collectedFeatures.append(f)
                 if case .point(let p) = gaze { collectedGaze.append(p) }
                 distances.append(f.distance)
-                logger.sample(kind: c.kind, time: s.timestamp, target: c.target, gaze: gazePoint, f: f)
+                logger.sample(kind: c.kind, time: s.timestamp, target: c.target, gaze: gazePoint, f: f, blink: s.blink, hold: false)
             }
         } else {
             gaze = .lost
+        }
+        if route == .game, mode == .eyes, let f = s.features {
+            logger.sample(kind: "frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
+                          blink: s.blink, hold: blink.freezeGaze)
         }
         if s.timestamp - lastStatusPush > 0.1 {
             lastStatusPush = s.timestamp
@@ -221,6 +232,19 @@ final class AppModel: ObservableObject {
         case .eyes: return balance.hitMargin(measuredErrorPt: report?.meanErrorPt ?? balance.hitMarginPt.max)
         }
     }
+
+    /// Debug builds only: launch argument `-SpantherAutoplay eyes|touch` starts a game played by a bot that
+    /// looks at (or touches) the lowest meteor and reloads after running dry. Used by the Simulator smoke test
+    /// in CI, where there is no face tracking.
+    #if DEBUG
+    let autoplay: String? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-SpantherAutoplay"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }()
+    #else
+    let autoplay: String? = nil
+    #endif
 
     var logURL: URL { logger.url }
     func log(_ r: AsteroidRecord) { logger.asteroid(r, time: CACurrentMediaTime()) }

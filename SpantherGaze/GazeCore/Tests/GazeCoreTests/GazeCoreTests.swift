@@ -424,6 +424,110 @@ final class EnergyTests: XCTestCase {
         XCTAssertGreaterThan(m.asteroids[0].progress, 0)
     }
 
+    /// Steps the model at 60 Hz with the gaze on `p` for `sec` seconds and returns the events.
+    @discardableResult
+    func look(_ m: GameModel, at p: Vec2, for sec: Double) -> [GameEvent] {
+        var ev: [GameEvent] = []
+        for _ in 0..<Int((sec * 60).rounded()) { ev += m.update(dt: 1.0 / 60, gaze: .point(p)) }
+        return ev
+    }
+
+    func testStarvedLookHoldsProgressWithoutSlipAndCountsReaction() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 15)
+        let A = Vec2(100, 250), B = Vec2(300, 250)
+        _ = parked(m, "XL", at: A)
+        look(m, at: A, for: 2.05)                      // XL killed: 10 -> 5
+        XCTAssertEqual(m.energy, 5)
+        let xl = parked(m, "XL", at: A)
+        look(m, at: A, for: 1.8)                       // 0.9 of the way, still affordable
+        _ = parked(m, "S", at: B)
+        look(m, at: B, for: 0.55)                      // S killed: 5 -> 4; the XL drained to about 0.35
+        XCTAssertEqual(m.energy, 4)
+        let before = try XCTUnwrap(m.asteroids.first { $0.id == xl.id })
+        XCTAssertEqual(before.progress, 0.35, accuracy: 0.03)
+        look(m, at: A, for: 1.5)                       // back on the XL, which now costs more than the pool
+        let after = try XCTUnwrap(m.asteroids.first { $0.id == xl.id })
+        XCTAssertTrue(after.isStarved)
+        XCTAssertEqual(after.progress, before.progress, accuracy: 1e-9, "waits for the reload instead of draining")
+        XCTAssertEqual(after.slips, 0, "running out of energy is not an attention slip")
+
+        // A meteor first looked at while starved still gets its reaction time.
+        m.removeAll()
+        let fresh = parked(m, "XL", at: A)
+        look(m, at: A, for: 0.3)
+        XCTAssertNotNil(m.asteroids.first { $0.id == fresh.id }?.firstLookTime)
+    }
+
+    func testStarvedTargetIsStillSlowedByGaze() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 16)
+        for _ in 0..<2 { _ = parked(m, "XL", at: Vec2(195, 300)); look(m, at: Vec2(195, 300), for: 2.1) }
+        XCTAssertEqual(m.energy, 0)
+        m.removeAll()
+        var a = m.spawn(className: "M")
+        a.position = Vec2(195, 100); a.velocity = Vec2(0, 100)
+        m.insert(a)
+        m.update(dt: 0.1, gaze: .point(Vec2(195, 100)))
+        XCTAssertTrue(m.starved)
+        XCTAssertEqual(m.asteroids[0].position.y, 100 + 100 * 0.1 * 0.6, accuracy: 1e-9, "40% brake on levels 1-3")
+    }
+
+    func testCostNeverExceedsAFullPool() throws {
+        var c = try BalanceTests.config()
+        c.energy?.max = 4                               // XL costs 5 in the file
+        let m = GameModel(config: c, screen: screen, marginPt: 30, seed: 17)
+        XCTAssertEqual(m.cost(className: "XL"), 4)
+        let xl = parked(m, "XL", at: Vec2(195, 300))
+        look(m, at: Vec2(195, 300), for: 2.1)
+        XCTAssertNil(m.asteroids.first { $0.id == xl.id }, "a full pool can always pay for any class")
+        XCTAssertEqual(m.energy, 0)
+    }
+
+    func testNeedsReloadWhenStarvedOrEmpty() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 18)
+        XCTAssertFalse(m.needsReload)
+        for _ in 0..<2 { _ = parked(m, "XL", at: Vec2(195, 300)); look(m, at: Vec2(195, 300), for: 2.1) }
+        m.removeAll()
+        m.update(dt: 1.0 / 60, gaze: .notLooking)
+        XCTAssertFalse(m.starved)
+        XCTAssertTrue(m.needsReload, "nothing left for even an S")
+        m.reload()
+        XCTAssertFalse(m.needsReload)
+
+        var c = try BalanceTests.config()
+        c.energy = nil
+        XCTAssertFalse(GameModel(config: c, screen: screen, marginPt: 30, seed: 19).needsReload)
+    }
+
+    /// A bot with perfect gaze that needs 1.5 s (three blinks) to reload after running dry should still clear
+    /// all 10 levels at the 80% advance ratio. Guards the energy numbers in balance.json against making the
+    /// game unwinnable. It reloads about twice a level at the start and about five times by level 10.
+    func testAllLevelsStayWinnableWithRealisticReloads() throws {
+        for seed in [1, 2] as [UInt64] {
+            let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 45, seed: seed)
+            var cleared: [Int: Double] = [:]
+            var reloads: [Int] = []
+            var drySince: Double?
+            var count = 0
+            var t = 0.0
+            while cleared[10] == nil && t < 900 {
+                if m.needsReload {
+                    if drySince == nil { drySince = t }
+                    if t - (drySince ?? t) >= 1.5 { if m.reload() { count += 1 }; drySince = nil }
+                } else { drySince = nil }
+                let target = m.asteroids.filter { $0.position.y > 0 }.max { $0.position.y < $1.position.y }
+                for e in m.update(dt: 1.0 / 60, gaze: target.map { .point($0.position) } ?? .notLooking) {
+                    if case let .levelEnded(level, ratio, _) = e { cleared[level] = ratio; reloads.append(count); count = 0 }
+                    if case .shieldsDepleted = e { XCTFail("seed \(seed): shields ran out on level \(m.level)") }
+                }
+                t += 1.0 / 60
+            }
+            for level in 1...10 {
+                XCTAssertGreaterThanOrEqual(cleared[level] ?? 0, 0.8, "seed \(seed) level \(level)")
+            }
+            XCTAssertGreaterThanOrEqual(reloads.first ?? 0, 1, "the pool should run dry at least once on level 1")
+        }
+    }
+
     func testNoEnergyConfigMeansNoLimit() throws {
         var c = try BalanceTests.config()
         c.energy = nil
