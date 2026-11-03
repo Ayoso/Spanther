@@ -40,6 +40,9 @@ final class GameScene: SKScene {
     private let world = SKNode()
     private var rocks: [Int: RockNode] = [:]
     private let reticle = SKShapeNode(circleOfRadius: 14)
+    private static let reticleColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.7)
+    private static let reticleStarvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.85)
+    private var reticleStarved = false
     private var touchPoint: Vec2?
     private var lastTime: TimeInterval = 0
     private let boomHaptic = UIImpactFeedbackGenerator(style: .medium)
@@ -85,7 +88,7 @@ final class GameScene: SKScene {
             c.zRotation = CGFloat(a - .pi / 2)
             earth.addChild(c)
         }
-        reticle.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.7)
+        reticle.strokeColor = Self.reticleColor
         reticle.lineWidth = 2
         reticle.zPosition = 50
         reticle.isHidden = true
@@ -202,6 +205,12 @@ final class GameScene: SKScene {
             reticle.position = sk(p)
             let r = useTouch ? 14 : max(10, marginPt * 0.5)
             reticle.setScale(r / 14)
+            // In eye mode the aim is about as big as the meteor's ring and sits right on it, so it would hide
+            // the red "no energy" ring. The aim turns red as well while it rests on a meteor the pool can't pay for.
+            if reticleStarved != m.starved {
+                reticleStarved = m.starved
+                reticle.strokeColor = m.starved ? Self.reticleStarvedColor : Self.reticleColor
+            }
         } else {
             reticle.isHidden = true
         }

@@ -10,7 +10,7 @@ struct MenuView: View {
                 .font(.system(size: 46, weight: .black, design: .rounded))
                 .tracking(4)
                 .foregroundStyle(LinearGradient(colors: [.white, Palette.fire], startPoint: .top, endPoint: .bottom))
-            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся. Кончилась энергия? Моргни 3 раза.")
+            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся. Кончилась энергия? Моргни 3\u{00A0}раза.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Palette.dim)
                 .fixedSize(horizontal: false, vertical: true)
@@ -41,6 +41,7 @@ struct MenuView: View {
             if !app.eyeTrackingSupported {
                 Text("Этот iPhone не поддерживает отслеживание лица (нужен TrueDepth или чип A12 и новее). Доступна игра пальцем.")
                     .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Toggle("Зрачки через Vision", isOn: $app.usePupils).font(.footnote).foregroundStyle(Palette.dim)
             Toggle("Отладка", isOn: $app.showDebug).font(.footnote).foregroundStyle(Palette.dim)

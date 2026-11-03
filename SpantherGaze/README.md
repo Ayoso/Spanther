@@ -43,7 +43,7 @@ Unit tests: `cd GazeCore && swift test` (Mac or Linux). Camera code only works o
 - 10 levels of 45 s on the S-curve from BALANCE.md, 5 Earth shields, no game-over screen: running out of shields restarts the level a little easier.
 - Kill ratio at the end of a level: 80% or more advances, under 50% repeats easier, in between repeats at the same difficulty (BALANCE.md does not say; this is my default).
 - "Играть пальцем" uses the same rules with a finger on the meteor.
-- Energy pool of 10; a kill costs S 1, M 2, L 3, XL 5. A meteor you cannot afford gets a red ring and no progress. Three blinks within 2 s (or three taps on the energy bar in touch mode) refill the pool. `BlinkDetector` in `GazeCore/Energy.swift` reads ARKit `eyeBlinkLeft/Right`; while the lids close the gaze point is held so the aim does not dip.
+- Energy pool of 10; a kill costs S 1, M 2, L 3, XL 5. A meteor you cannot afford gets a red ring, the aim on it turns red, and it makes no progress. Three blinks within 2 s (or three taps on the energy bar in touch mode) refill the pool. `BlinkDetector` in `GazeCore/Energy.swift` reads ARKit `eyeBlinkLeft/Right`; while the lids close the gaze point is held so the aim does not dip.
 
 ## Unverified on device
 

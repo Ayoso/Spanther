@@ -167,6 +167,28 @@ jobs:
           done
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
+      - name: Menu on the smallest screen (iPhone SE, 4.7 inch)
+        run: |
+          OUT="$PWD/out"; BID=com.spanther.SpantherGaze
+          SE=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          se = [d for runtime, ds in devices.items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone SE")]
+          print(se[-1]["udid"] if se else "")
+          ')
+          if [ -z "$SE" ]; then echo "NOTE no iPhone SE simulator on this runner" >> "$OUT/checks.txt"; exit 0; fi
+          xcrun simctl bootstatus "$SE" -b
+          xcrun simctl install "$SE" build/Debug-iphonesimulator/SpantherGaze.app
+          xcrun simctl launch "$SE" "$BID"
+          sleep 8
+          xcrun simctl io "$SE" screenshot --type=png "$OUT/tmp.png" >/dev/null 2>&1 \
+            && sips -s format jpeg -s formatOptions 80 -Z 1200 "$OUT/tmp.png" --out "$OUT/00-menu-se.jpg" >/dev/null 2>&1
+          rm -f "$OUT/tmp.png"
+          if xcrun simctl spawn "$SE" launchctl list | grep -q "UIKitApplication:$BID"; then
+            echo "PASS menu on iPhone SE: app running" >> "$OUT/checks.txt"
+          else
+            echo "FAIL menu on iPhone SE: app not running" >> "$OUT/checks.txt"
+          fi
       - name: Publish to the ci-screenshots branch
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         env:
