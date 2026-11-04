@@ -4,6 +4,8 @@ Eye-controlled iPhone game for attention training (kids 6–10). Meteors fly at 
 
 ## Как поставить на iPhone (для того, у кого есть Mac)
 
+Нет Mac? С Windows игра ставится через Sideloadly: пошаговая инструкция в [SpantherGaze/SIDELOAD.md](SpantherGaze/SIDELOAD.md).
+
 Нужно:
 - iPhone XS, XR или новее (чип A12 и выше). iPhone X и более старые не подойдут.
 - Mac и кабель, который передаёт данные (не только зарядку).

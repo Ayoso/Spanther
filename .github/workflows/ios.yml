@@ -42,6 +42,23 @@ jobs:
           mkdir Payload
           cp -R build/Release-iphoneos/SpantherGaze.app Payload/
           zip -qry SpantherGaze-unsigned.ipa Payload
+      # What Sideloadly needs from the file (SIDELOAD.md): Payload/<app>/ with the binary and Info.plist,
+      # an arm64 binary, and the keys iOS checks on install and on first launch.
+      - name: Check the .ipa
+        run: |
+          set -e
+          unzip -l SpantherGaze-unsigned.ipa > ipa-files.txt
+          grep -q " Payload/SpantherGaze.app/SpantherGaze$" ipa-files.txt
+          grep -q " Payload/SpantherGaze.app/Info.plist$" ipa-files.txt
+          grep -q " Payload/SpantherGaze.app/balance.json$" ipa-files.txt
+          APP=build/Release-iphoneos/SpantherGaze.app
+          lipo -info "$APP/SpantherGaze"
+          lipo -info "$APP/SpantherGaze" | grep -q arm64
+          for key in CFBundleIdentifier CFBundleShortVersionString MinimumOSVersion NSCameraUsageDescription; do
+            value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$APP/Info.plist")
+            echo "$key: $value"
+          done
+          ls -l SpantherGaze-unsigned.ipa
       - uses: actions/upload-artifact@v4
         with:
           name: SpantherGaze-unsigned-ipa
