@@ -48,6 +48,22 @@ final class TransformsTests: XCTestCase {
             XCTAssertEqual(g.distance, 0.3, accuracy: 1e-9)
         }
     }
+
+    /// Turning the head while the eyes stay on the same screen point must not change the model's input:
+    /// head pose is not a feature, the hits already account for it.
+    func testHeadTurnDoesNotChangeFeaturesForTheSamePoint() throws {
+        let straight = try XCTUnwrap(GazeFeatures.make(syntheticFrame(lookAtScreen: Vec2(0.01, -0.06), yaw: 0)))
+        let turned = try XCTUnwrap(GazeFeatures.make(syntheticFrame(lookAtScreen: Vec2(0.01, -0.06), yaw: 0.25)))
+        for set in GazeFeatures.FeatureSet.allCases {
+            let a = straight.vector(set), b = turned.vector(set)
+            XCTAssertEqual(a.count, b.count)
+            for (x, y) in zip(a, b) where !(x.isNaN && y.isNaN) { XCTAssertEqual(x, y, accuracy: 1e-9, "\(set)") }
+        }
+        XCTAssertEqual(straight.vector(.lookAt).count, 5)
+        XCTAssertEqual(straight.vector(.eyes).count, 7)
+        XCTAssertEqual(straight.vector(.eyesAndPupils).count, 9)
+        XCTAssertTrue(straight.vector(.eyesAndPupils)[7].isNaN, "no pupil result is NaN, not 0")
+    }
 }
 
 final class CalibrationTests: XCTestCase {
@@ -72,6 +88,61 @@ final class CalibrationTests: XCTestCase {
             err += model.predict([(target.x - 195) / 6000, (target.y - 422) / 6000, 0]).distance(to: target)
         }
         XCTAssertLessThan(err / Double(CalibrationLayout.validation.count), 5, "mean error in pt")
+    }
+
+    /// Synthetic calibration: features in metres on the screen plane (like the lookAt hit) plus quadratic terms
+    /// and a pupil pair that is missing on every other frame.
+    func syntheticCalibration(seed: UInt64) -> (X: [[Double]], Y: [Vec2]) {
+        var rng = SeededRandom(seed: seed)
+        var X: [[Double]] = [], Y: [Vec2] = []
+        for t in CalibrationLayout.calibration {
+            let target = CalibrationLayout.point(t, in: Vec2(390, 844))
+            for i in 0..<30 {
+                let fx = (target.x - 195) / 6000 + Double.random(in: -0.0002...0.0002, using: &rng)
+                let fy = (target.y - 422) / 6000 + Double.random(in: -0.0002...0.0002, using: &rng)
+                let pupil = i % 2 == 0 ? [fx * 0.5, fy * 0.5] : [Double.nan, .nan]
+                X.append([fx, fy, fx * fx, fy * fy, fx * fy] + pupil)
+                Y.append(target)
+            }
+        }
+        return (X, Y)
+    }
+
+    func testMissingPupilsCountAsAverage() throws {
+        let (X, Y) = syntheticCalibration(seed: 3)
+        let model = try XCTUnwrap(RidgeModel.fit(features: X, targets: Y, lambda: 0.001))
+        XCTAssertFalse(model.wx.contains { $0.isNaN } || model.wy.contains { $0.isNaN })
+        let x: [Double] = [0.01, -0.02, 0.0001, 0.0004, -0.0002]
+        let withNaN = model.predict(x + [.nan, .nan])
+        let withMean = model.predict(x + [model.mean[5], model.mean[6]])
+        XCTAssertEqual(withNaN.x, withMean.x, accuracy: 1e-9)
+        XCTAssertEqual(withNaN.y, withMean.y, accuracy: 1e-9)
+        // Half the pupils missing still fits: check points without pupils land within 5 pt.
+        var err = 0.0
+        for t in CalibrationLayout.validation {
+            let target = CalibrationLayout.point(t, in: Vec2(390, 844))
+            let fx = (target.x - 195) / 6000, fy = (target.y - 422) / 6000
+            err += model.predict([fx, fy, fx * fx, fy * fy, fx * fy, .nan, .nan]).distance(to: target)
+        }
+        XCTAssertLessThan(err / Double(CalibrationLayout.validation.count), 5, "mean error in pt")
+    }
+
+    /// The first iPhone session: a glance 10 cm to the side sent the aim 5000 pt off the screen through the
+    /// quadratic terms. Features are now clamped near the calibrated range, and the glance counts as looking away.
+    func testFarOffScreenGlanceIsClampedAndFlagged() throws {
+        let (X, Y) = syntheticCalibration(seed: 4)
+        let model = try XCTUnwrap(RidgeModel.fit(features: X, targets: Y, lambda: 0.001))
+        let fx = -0.1, fy = 0.0   // 10 cm left of the camera, far past the screen edge (about 3 cm)
+        let x = [fx, fy, fx * fx, fy * fy, fx * fy, Double.nan, .nan]
+        let p = model.predict(x)
+        XCTAssertGreaterThan(p.x, -0.5 * 390, "clamped near the screen, not thousands of points away")
+        XCTAssertLessThan(p.x, 1.5 * 390)
+        XCTAssertGreaterThan(p.y, -0.5 * 844)
+        XCTAssertLessThan(p.y, 1.5 * 844)
+        XCTAssertTrue(model.outOfRange(x, features: 0..<2, margin: RidgeModel.lookingAwayMargin))
+        // A point inside the screen, and one just past its edge, are not looking away.
+        XCTAssertFalse(model.outOfRange([0.02, 0.05, 0, 0, 0, .nan, .nan], features: 0..<2, margin: RidgeModel.lookingAwayMargin))
+        XCTAssertFalse(model.outOfRange([0.04, -0.07, 0, 0, 0, .nan, .nan], features: 0..<2, margin: RidgeModel.lookingAwayMargin))
     }
 
     func testCheckPointsAreNotCalibrationPoints() {

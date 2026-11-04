@@ -77,8 +77,10 @@ final class FaceTracker: NSObject, ARSessionDelegate {
                 }
             }
         }
+        // A pupil result stays usable for 0.3 s. With 0.1 s, the first iPhone session had pupils on only 54% of
+        // calibration frames, because Vision runs on every second frame and a request can take longer than that.
         lock.lock()
-        let pupils = latestPupils.flatMap { frame.timestamp - $0.time < 0.1 ? $0.value : nil }
+        let pupils = latestPupils.flatMap { frame.timestamp - $0.time < 0.3 ? $0.value : nil }
         lock.unlock()
 
         let ff = FaceFrame(

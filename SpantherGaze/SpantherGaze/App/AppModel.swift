@@ -115,9 +115,15 @@ final class AppModel: ObservableObject {
             }
         } else if let f = s.features {
             if let m = model {
-                let raw = m.predict(f.vector(GazeFeatures.FeatureSet(rawValue: m.featureSet) ?? featureSet))
-                let p = filter.filter(raw, t: s.timestamp)
-                gaze = .point(p)
+                let v = f.vector(GazeFeatures.FeatureSet(rawValue: m.featureSet) ?? featureSet)
+                if m.outOfRange(v, features: 0..<2, margin: RidgeModel.lookingAwayMargin) {
+                    // The eyes point well off the screen (a glance away). Hide the aim instead of extrapolating,
+                    // and start the filter afresh so the aim does not swing back in from far away.
+                    filter.reset()
+                    gaze = .notLooking
+                } else {
+                    gaze = .point(filter.filter(m.predict(v), t: s.timestamp))
+                }
             } else {
                 gaze = .notLooking
             }

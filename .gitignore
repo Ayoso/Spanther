@@ -4,3 +4,5 @@ build/
 xcuserdata/
 DerivedData/
 *.ipa
+# Session CSVs exported from the app are face data (CLAUDE.md rule 5)
+spanther-*.csv
