@@ -6,7 +6,7 @@ Native SPANTHER prototype: SwiftUI + SpriteKit + ARKit face tracking. Meteors fa
 
 - `GazeCore` (pure Swift) builds and its 38 unit tests pass with Swift 6.0 on Linux and in CI.
 - The app target compiles in GitHub Actions (Xcode 16.4 Release, and the newest Xcode on the runner in Debug), unsigned. Step-by-step Mac instructions (in Russian) are in the root README, the Windows route is in `SIDELOAD.md`.
-- First run on a real iPhone: Aziz, iPhone 13, 2026-11-04, installed with Sideloadly, played to level 6. Check error 1.29 cm; tracking ran at 30 fps, not 60. The aim went wild from level 5 on, which led to the gaze model changes below (replayed on that session, not yet confirmed on the phone).
+- First run on a real iPhone: Aziz, iPhone 13, 2026-11-04, installed with Sideloadly, played to level 6. Check error 1.29 cm; tracking ran at 30 fps, not 60. The aim went wild from level 5 on, which led to the gaze model changes below (replayed on that session, not yet confirmed on the phone). Every frame interval in that CSV was 33.3 ms from the first calibration dot, so the camera ran at 30 fps from the start, not after heating up. The CSV and the debug overlay now show the camera format, the formats the phone offers, the thermal state and Low Power Mode, so the next session shows why.
 - CI also runs the app in the iOS Simulator (job `simulator-smoke`): a Debug-only bot plays with the launch argument `-SpantherAutoplay eyes|touch`, the job checks that the app keeps running and that kills spend energy and reloads happen, and it pushes screenshots, session CSVs and logs to the `ci-screenshots` branch. Face tracking does not exist in the Simulator, so "eyes" there means the bot's gaze.
 
 ## Build and run on an iPhone
@@ -24,9 +24,9 @@ Unit tests: `cd GazeCore && swift test` (Mac or Linux). Camera code only works o
 | Module | Files | Notes |
 |---|---|---|
 | GazeCore | `GazeCore/Sources/GazeCore` | Matrices, coordinate transforms (all in `Transforms.swift`), gaze ray to screen plane, ridge calibration, One Euro, accuracy metrics, balance config, the full game model. No UIKit/ARKit. |
-| Tracking | `SpantherGaze/Tracking` | `FaceTracker` runs ARKit off the main thread and asks for a 60 fps video format (the first iPhone 13 session ran at 30 fps). `PupilDetector` protocol with a Vision implementation; MediaPipe can be added behind the same protocol to compare on the same recordings. |
+| Tracking | `SpantherGaze/Tracking` | `FaceTracker` runs ARKit off the main thread and picks the fastest video format the phone offers (CLAUDE.md asks for 60 fps; the first iPhone 13 session ran at 30). It reports that format, the thermal state and Low Power Mode to the debug overlay and the CSV. `PupilDetector` protocol with a Vision implementation; MediaPipe can be added behind the same protocol to compare on the same recordings. |
 | Screens | `SpantherGaze/Screens` | Menu, 9-dot calibration, 13-dot check (error and jitter in pt, cm and degrees), SpriteKit game, debug overlay. |
-| Logging | `SpantherGaze/Logging` | CSV exported only through the Share button: calibration/check samples, every tracked frame of an eye game (`frame`: features, gaze, raw `eyeBlinkLeft/Right`, gaze-hold flag), every meteor outcome, and `blink` / `energy` / `reload` events. |
+| Logging | `SpantherGaze/Logging` | CSV exported only through the Share button: calibration/check samples, every tracked frame of an eye game (`frame`: features, gaze, raw `eyeBlinkLeft/Right`, gaze-hold flag), every meteor outcome, `blink` / `energy` / `reload` events, `tracking` rows (camera format, formats offered, thermal state, Low Power Mode) at the start of a session and on each change, and each frame's processing time (`proc_ms`). |
 
 ## Gaze pipeline
 
@@ -45,7 +45,7 @@ Export the CSV on the phone (menu, «Экспорт CSV последней се�
 cd GazeCore && swift run GazeReplay ~/Downloads/spanther-2026-11-05_01-13-16.csv
 ```
 
-It refits the calibration for each feature set and prints the check error, how often the aim leaves the screen in each level, how often the player counted as looking away, and the blink detector's blinks and reloads next to the ones the app logged. Use it to compare tracking changes on the same recording instead of a new attempt. Session CSVs are face data: keep them out of the repository (rule 5).
+It refits the calibration for each feature set and prints the check error, how often the aim leaves the screen in each level, how often the player counted as looking away, and the blink detector's blinks and reloads next to the ones the app logged. For files recorded after 4 November 2026 it also prints the camera format, thermal state and frame processing time. Use it to compare tracking changes on the same recording instead of a new attempt. Session CSVs are face data: keep them out of the repository (rule 5).
 
 ## Gameplay (all from balance.json)
 

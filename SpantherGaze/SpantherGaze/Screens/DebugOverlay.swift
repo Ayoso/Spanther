@@ -22,6 +22,9 @@ struct DebugOverlay: View {
 
     private var lines: [String] {
         var l = [String(format: "track %.0f fps  %.2f ms/frame  face %@", status.fps, status.processingMs, status.faceFound ? "yes" : "no")]
+        let t = status.tracking
+        l.append("camera \(t.format)  thermal \(t.thermal)\(t.lowPower ? "  LOW POWER" : "")")
+        l.append("offered \(t.offered)")
         if let f = status.features {
             l.append(String(format: "dist %.1f cm  yaw %.0f°  pitch %.0f°  roll %.0f°", f.distance * 100, f.yaw * 57.3, f.pitch * 57.3, f.roll * 57.3))
             let le = f.leftEyeCamera, re = f.rightEyeCamera

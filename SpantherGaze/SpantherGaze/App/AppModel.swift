@@ -27,6 +27,8 @@ final class TrackingStatus: ObservableObject {
     @Published var pendingBlinks = 0
     @Published var reloadBlinksNeeded = 3
     @Published var blinksTotal = 0
+    /// Camera format, formats offered, thermal state and Low Power Mode.
+    @Published var tracking = TrackingInfo()
 }
 
 /// App state shared by all screens. Main thread only.
@@ -80,6 +82,17 @@ final class AppModel: ObservableObject {
             route = .game
         }
         tracker.onSample = { [weak self] s in self?.handle(s) }
+        tracker.onInfo = { [weak self] info in
+            self?.status.tracking = info
+            self?.logTracking()
+        }
+    }
+
+    /// Writes the camera format and device state into the current session CSV.
+    private func logTracking() {
+        let i = tracker.info
+        logger.tracking(format: i.format, offered: i.offered, thermal: i.thermal, lowPower: i.lowPower,
+                        time: CACurrentMediaTime())
     }
 
     var eyeTrackingSupported: Bool { FaceTracker.isSupported }
@@ -132,14 +145,15 @@ final class AppModel: ObservableObject {
                 collectedFeatures.append(f)
                 if case .point(let p) = gaze { collectedGaze.append(p) }
                 distances.append(f.distance)
-                logger.sample(kind: c.kind, time: s.timestamp, target: c.target, gaze: gazePoint, f: f, blink: s.blink, hold: false)
+                logger.sample(kind: c.kind, time: s.timestamp, target: c.target, gaze: gazePoint, f: f, blink: s.blink, hold: false,
+                              processingMs: s.processingMs)
             }
         } else {
             gaze = .lost
         }
         if route == .game, mode == .eyes, let f = s.features {
             logger.sample(kind: "frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
-                          blink: s.blink, hold: blink.freezeGaze)
+                          blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs)
         }
         if s.timestamp - lastStatusPush > 0.1 {
             lastStatusPush = s.timestamp
@@ -182,6 +196,7 @@ final class AppModel: ObservableObject {
         distances = []
         report = nil
         logger = SessionLogger()
+        logTracking()
         route = .calibration
     }
 

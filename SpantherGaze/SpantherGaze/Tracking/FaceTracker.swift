@@ -12,12 +12,29 @@ struct TrackingSample {
     var fps: Double
 }
 
+/// The camera format ARKit runs and the device state that can lower its frame rate, for the debug overlay and
+/// the session CSV (`tracking` rows). The first iPhone 13 session ran at 30 fps although `start()` asks for 60,
+/// and nothing in its CSV said why.
+struct TrackingInfo: Equatable {
+    /// The format the session runs, width x height @ fps, for example "1280x720@60".
+    var format = "-"
+    /// Every face tracking format the device offers, in ARKit's order (best quality first).
+    var offered = "-"
+    /// ProcessInfo thermal state: nominal, fair, serious or critical.
+    var thermal = "-"
+    var lowPower = false
+}
+
 /// ARKit face tracking adapter (the `Tracking` module in CLAUDE.md). All ARKit work runs on `queue`;
 /// samples are delivered to the main thread through `onSample`.
 final class FaceTracker: NSObject, ARSessionDelegate {
     static var isSupported: Bool { ARFaceTrackingConfiguration.isSupported }
 
     var onSample: ((TrackingSample) -> Void)?
+    /// Called on the main thread when tracking starts and whenever the thermal state or Low Power Mode changes.
+    var onInfo: ((TrackingInfo) -> Void)?
+    /// Main thread only.
+    private(set) var info = TrackingInfo()
     var pupilDetector: PupilDetector? = VisionPupilDetector()
 
     private let session = ARSession()
@@ -31,20 +48,60 @@ final class FaceTracker: NSObject, ARSessionDelegate {
     private var fpsFrames = 0
     private var fps = 0.0
 
+    /// Main thread.
     func start() {
         guard Self.isSupported else { return }
         let config = ARFaceTrackingConfiguration()
         config.maximumNumberOfTrackedFaces = 1
         config.isLightEstimationEnabled = false
-        if let f60 = ARFaceTrackingConfiguration.supportedVideoFormats.first(where: { $0.framesPerSecond == 60 }) {
-            config.videoFormat = f60
+        // CLAUDE.md asks for 60 fps. ARKit lists formats best first, and `max` keeps the first of the fastest,
+        // so this is the best format at the highest frame rate the device offers.
+        let formats = ARFaceTrackingConfiguration.supportedVideoFormats
+        if let fastest = formats.max(by: { $0.framesPerSecond < $1.framesPerSecond }) {
+            config.videoFormat = fastest
         }
+        info.offered = formats.isEmpty ? "-" : formats.map { Self.describe($0) }.joined(separator: " ")
+        info.format = Self.describe(config.videoFormat)
+        let center = NotificationCenter.default
+        center.removeObserver(self)
+        center.addObserver(self, selector: #selector(deviceStateChanged),
+                           name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+        center.addObserver(self, selector: #selector(deviceStateChanged),
+                           name: .NSProcessInfoPowerStateDidChange, object: nil)
+        updateDeviceState()
         session.delegateQueue = queue
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
     func stop() { session.pause() }
+
+    static func describe(_ f: ARConfiguration.VideoFormat) -> String {
+        "\(Int(f.imageResolution.width))x\(Int(f.imageResolution.height))@\(f.framesPerSecond)"
+    }
+
+    static func describe(_ s: ProcessInfo.ThermalState) -> String {
+        switch s {
+        case .nominal: return "nominal"
+        case .fair: return "fair"
+        case .serious: return "serious"
+        case .critical: return "critical"
+        @unknown default: return "unknown"
+        }
+    }
+
+    /// The notifications arrive on any thread.
+    @objc private func deviceStateChanged() {
+        DispatchQueue.main.async { [weak self] in self?.updateDeviceState() }
+    }
+
+    /// Main thread.
+    private func updateDeviceState() {
+        let p = ProcessInfo.processInfo
+        info.thermal = Self.describe(p.thermalState)
+        info.lowPower = p.isLowPowerModeEnabled
+        onInfo?(info)
+    }
 
     // MARK: ARSessionDelegate (runs on `queue`)
 

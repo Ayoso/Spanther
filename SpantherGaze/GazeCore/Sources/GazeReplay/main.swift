@@ -98,6 +98,18 @@ print("\(rows.count) rows: \(used.count) calibration dots (\(attempts.count - us
       + "\(checkRows.count) check frames, \(frameRows.count) game frames in levels \(levels.map(String.init).joined(separator: ", ")).")
 print(String(format: "Screen %.0f x %.0f pt, tracking at %.0f fps, check distance %.1f cm.",
              screen.x, screen.y, gaps.isEmpty ? 0 : 1 / gaps[gaps.count / 2], distanceCm))
+// Camera format and device state (`tracking` rows) and frame processing time; files from before they were
+// logged have neither.
+for r in rows where r.kind == "tracking" {
+    let lowPower = r.cells["low_power"] == "1" ? ", Low Power Mode on" : ""
+    print(String(format: "At %.1f s: camera ", r.time) + (r.cells["video_format"] ?? "?")
+          + ", offered " + (r.cells["formats_offered"] ?? "?") + ", thermal " + (r.cells["thermal"] ?? "?") + lowPower + ".")
+}
+let processing = rows.compactMap { $0.d("proc_ms") }.sorted()
+if !processing.isEmpty {
+    print(String(format: "Frame processing: median %.2f ms, 95th percentile %.2f ms.",
+                 processing[processing.count / 2], processing[(processing.count - 1) * 95 / 100]))
+}
 print("")
 print("Off screen = aim more than 1 cm (60 pt) outside the screen while the player was not blinking.")
 print("feature set     check cm  jitter cm | off screen % by level: " + levels.map { String(format: "%3d", $0) }.joined(separator: " ")

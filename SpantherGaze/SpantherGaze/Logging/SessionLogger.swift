@@ -11,6 +11,9 @@ final class SessionLogger {
         case pupilU = "pupil_u", pupilV = "pupil_v"
         case className = "class", level, reaction = "reaction_s", lifetime = "lifetime_s", slips, destroyed
         case blinkSec = "blink_s", energy, blinkLeft = "blink_l", blinkRight = "blink_r", hold
+        // Added after the first iPhone session; readers find columns by name, so older files still read.
+        case processingMs = "proc_ms"
+        case videoFormat = "video_format", formatsOffered = "formats_offered", thermal, lowPower = "low_power"
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -59,8 +62,9 @@ final class SessionLogger {
     /// One tracked sample: `calibration` / `check` rows have a target, `frame` rows (every tracked frame of an
     /// eye-controlled game) do not. Raw eyeBlink values and the gaze-hold flag let blink thresholds be replayed
     /// offline on the same session (CLAUDE.md rule 7). Target and gaze in screen pt, hits in metres.
+    /// `processingMs` is the tracking queue's time for the frame (CLAUDE.md rule 4).
     func sample(kind: String, time: Double, target: Vec2?, gaze: Vec2?, f: GazeFeatures,
-                blink: (left: Double, right: Double)?, hold: Bool) {
+                blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil) {
         var r = Row(kind: kind, time: time)
         r.set(.targetX, target?.x)
         r.set(.targetY, target?.y)
@@ -81,6 +85,19 @@ final class SessionLogger {
         r.set(.blinkLeft, blink?.left)
         r.set(.blinkRight, blink?.right)
         r[.hold] = hold ? "1" : "0"
+        r.set(.processingMs, processingMs)
+        write(r.line)
+    }
+
+    /// A `tracking` row: the camera format the session runs, the formats the device offers, the thermal state
+    /// and Low Power Mode. Written when a session starts and whenever the thermal state or Low Power Mode
+    /// changes, so a session's frame rate can be explained from its CSV. The format strings hold no commas.
+    func tracking(format: String, offered: String, thermal: String, lowPower: Bool, time: Double) {
+        var r = Row(kind: "tracking", time: time)
+        r[.videoFormat] = format
+        r[.formatsOffered] = offered
+        r[.thermal] = thermal
+        r[.lowPower] = lowPower ? "1" : "0"
         write(r.line)
     }
 
