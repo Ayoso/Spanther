@@ -23,6 +23,11 @@ struct TrackingInfo: Equatable {
     /// ProcessInfo thermal state: nominal, fair, serious or critical.
     var thermal = "-"
     var lowPower = false
+    /// How the screen is held (ScreenOrientation), which the gaze transforms use.
+    var screen = "-"
+    /// The image orientation Vision runs with, for example "downMirrored"; "turned" when the tracker turned it 180°
+    /// because Vision found no face with the expected one.
+    var vision = "-"
 }
 
 /// ARKit face tracking adapter (the `Tracking` module in CLAUDE.md). All ARKit work runs on `queue`;
@@ -43,14 +48,26 @@ final class FaceTracker: NSObject, ARSessionDelegate {
     private let lock = NSLock()
     private var latestPupils: (value: PupilOffsets, time: Double)?
     private var visionBusy = false
+    /// Guarded by `lock`. Set on the main thread in `start`, read on `queue`.
+    private var orientation = ScreenOrientation.landscapeRight
+    /// Guarded by `lock`. The landscape image orientations are not yet checked on a phone, so Vision's results are
+    /// counted in windows of 30 requests (about 1 s): almost no face in a window turns the image 180°, a mostly
+    /// successful window keeps the orientation for good.
+    private var visionTurned = false
+    private var visionTrusted = false
+    private var visionAttempts = 0
+    private var visionHits = 0
     private var frameCount = 0
     private var fpsWindowStart = 0.0
     private var fpsFrames = 0
     private var fps = 0.0
 
-    /// Main thread.
-    func start() {
+    /// Main thread. `orientation` is how the app's screen is held; it has to match Info.plist.
+    func start(orientation: ScreenOrientation) {
         guard Self.isSupported else { return }
+        lock.lock(); self.orientation = orientation; let vision = visionDescriptionLocked; lock.unlock()
+        info.screen = orientation.rawValue
+        info.vision = vision
         let config = ARFaceTrackingConfiguration()
         config.maximumNumberOfTrackedFaces = 1
         config.isLightEstimationEnabled = false
@@ -78,6 +95,36 @@ final class FaceTracker: NSObject, ARSessionDelegate {
 
     static func describe(_ f: ARConfiguration.VideoFormat) -> String {
         "\(Int(f.imageResolution.width))x\(Int(f.imageResolution.height))@\(f.framesPerSecond)"
+    }
+
+    /// Names of the EXIF orientations 1...8, as CGImagePropertyOrientation spells them.
+    static func describeImageOrientation(_ raw: UInt32) -> String {
+        let names = ["up", "upMirrored", "down", "downMirrored", "leftMirrored", "right", "rightMirrored", "left"]
+        return (1...8).contains(raw) ? names[Int(raw) - 1] : "\(raw)"
+    }
+
+    /// Caller holds `lock`.
+    private var visionOrientationLocked: UInt32 {
+        let raw = Transforms.frontCameraImageOrientation(orientation)
+        return visionTurned ? Transforms.rotated180(exif: raw) : raw
+    }
+
+    /// Caller holds `lock`.
+    private var visionDescriptionLocked: String {
+        Self.describeImageOrientation(visionOrientationLocked) + (visionTurned ? " turned" : "")
+    }
+
+    /// Caller holds `lock`. Returns true when this result turned the image orientation.
+    private func recordVisionLocked(found: Bool) -> Bool {
+        guard !visionTrusted else { return false }
+        visionAttempts += 1
+        if found { visionHits += 1 }
+        guard visionAttempts >= 30 else { return false }
+        defer { visionAttempts = 0; visionHits = 0 }
+        if visionHits >= 20 { visionTrusted = true; return false }
+        guard visionHits <= 3 else { return false }
+        visionTurned.toggle()
+        return true
     }
 
     static func describe(_ s: ProcessInfo.ThermalState) -> String {
@@ -118,19 +165,33 @@ final class FaceTracker: NSObject, ARSessionDelegate {
         // Pupils: every second frame, never more than one Vision request in flight.
         frameCount += 1
         if let detector = pupilDetector, frameCount % 2 == 0 {
-            lock.lock(); let busy = visionBusy; if !busy { visionBusy = true }; lock.unlock()
+            lock.lock()
+            let busy = visionBusy
+            if !busy { visionBusy = true }
+            let raw = visionOrientationLocked
+            lock.unlock()
             if !busy {
                 let buffer = frame.capturedImage
                 let ts = frame.timestamp
+                // The sensor image is rotated and mirrored relative to the upright face; Transforms says how
+                // for the way the phone is held (CLAUDE.md rule 3).
+                let imageOrientation = CGImagePropertyOrientation(rawValue: raw) ?? .leftMirrored
                 visionQueue.async { [weak self] in
-                    // Front camera, phone held in portrait: the sensor image is rotated and mirrored relative
-                    // to the upright face. Check this against the debug overlay on a real device.
-                    let p = detector.detect(buffer, orientation: .leftMirrored)
+                    let p = detector.detect(buffer, orientation: imageOrientation)
                     guard let self else { return }
                     self.lock.lock()
                     if let p { self.latestPupils = (p, ts) }
                     self.visionBusy = false
+                    let turned = self.recordVisionLocked(found: p != nil)
+                    let vision = self.visionDescriptionLocked
                     self.lock.unlock()
+                    if turned {
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self else { return }
+                            self.info.vision = vision
+                            self.onInfo?(self.info)
+                        }
+                    }
                 }
             }
         }
@@ -138,6 +199,7 @@ final class FaceTracker: NSObject, ARSessionDelegate {
         // calibration frames, because Vision runs on every second frame and a request can take longer than that.
         lock.lock()
         let pupils = latestPupils.flatMap { frame.timestamp - $0.time < 0.3 ? $0.value : nil }
+        let orientation = self.orientation
         lock.unlock()
 
         let ff = FaceFrame(
@@ -147,6 +209,7 @@ final class FaceTracker: NSObject, ARSessionDelegate {
             rightEyeTransform: Mat4(face.rightEyeTransform),
             lookAtPoint: Vec3(face.lookAtPoint),
             cameraTransform: Mat4(frame.camera.transform),
+            orientation: orientation,
             pupils: pupils)
         let features = GazeFeatures.make(ff)
         let blink = (left: face.blendShapes[.eyeBlinkLeft]?.doubleValue ?? 0,

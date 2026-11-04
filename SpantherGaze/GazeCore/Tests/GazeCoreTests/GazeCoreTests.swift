@@ -20,7 +20,7 @@ final class TransformsTests: XCTestCase {
     }
 
     /// Synthetic face 30 cm in front of the camera whose eyes look straight at a point on the screen.
-    func syntheticFrame(lookAtScreen p: Vec2, yaw: Double = 0) -> FaceFrame {
+    func syntheticFrame(lookAtScreen p: Vec2, yaw: Double = 0, orientation: ScreenOrientation = .landscapeRight) -> FaceFrame {
         let face = Mat4.translation(Vec3(0, 0, 0.3)) * Mat4.rotationY(yaw)
         // Point on the screen plane, expressed in face space.
         let target = face.rigidInverse.point(Vec3(p.x, p.y, 0))
@@ -33,19 +33,54 @@ final class TransformsTests: XCTestCase {
             return Mat4(columns: [xAxis.x, xAxis.y, xAxis.z, 0], [yAxis.x, yAxis.y, yAxis.z, 0], [z.x, z.y, z.z, 0], [o.x, o.y, o.z, 1])
         }
         return FaceFrame(timestamp: 0, faceTransform: face, leftEyeTransform: eye(0.032), rightEyeTransform: eye(-0.032),
-                         lookAtPoint: target, cameraTransform: .identity)
+                         lookAtPoint: target, cameraTransform: .identity, orientation: orientation)
     }
 
-    func testFeaturesRecoverScreenPointInPortraitAxes() throws {
-        for yaw in [0.0, 0.2, -0.25] {
-            let g = try XCTUnwrap(GazeFeatures.make(syntheticFrame(lookAtScreen: Vec2(0.03, -0.05), yaw: yaw)))
-            let expected = Transforms.cameraPlaneToPortrait(Vec2(0.03, -0.05))
+    func testFeaturesRecoverScreenPointInScreenAxes() throws {
+        for o in ScreenOrientation.allCases {
+          for yaw in [0.0, 0.2, -0.25] {
+            let g = try XCTUnwrap(GazeFeatures.make(syntheticFrame(lookAtScreen: Vec2(0.03, -0.05), yaw: yaw, orientation: o)))
+            let expected = Transforms.cameraPlaneToScreen(Vec2(0.03, -0.05), o)
             XCTAssertEqual(g.lookAtHit.x, expected.x, accuracy: 1e-9)
             XCTAssertEqual(g.lookAtHit.y, expected.y, accuracy: 1e-9)
             XCTAssertEqual(g.eyeAxisHit.x, expected.x, accuracy: 1e-9)
             XCTAssertEqual(g.eyeAxisHit.y, expected.y, accuracy: 1e-9)
             XCTAssertEqual(g.yaw, yaw, accuracy: 1e-9)
             XCTAssertEqual(g.distance, 0.3, accuracy: 1e-9)
+          }
+        }
+    }
+
+    /// Camera +x runs toward the bottom of the phone and +y to its right in portrait (checked on the iPhone 13).
+    /// Turning the phone turns the screen axes with it: a quarter turn with the camera going left (landscapeRight)
+    /// turns a screen vector a quarter turn counterclockwise as the player sees it, (x, y) -> (y, -x) with y down.
+    func testCameraPlaneToScreenTurnsWithThePhone() {
+        let towardBottom = Vec2(1, 0), toTheRight = Vec2(0, 1)
+        XCTAssertEqual(Transforms.cameraPlaneToScreen(towardBottom, .portrait), Vec2(0, 1), "below the camera")
+        XCTAssertEqual(Transforms.cameraPlaneToScreen(toTheRight, .portrait), Vec2(1, 0))
+        // Camera on the left: the bottom of the phone is on the right, so the screen centre is right of the camera.
+        XCTAssertEqual(Transforms.cameraPlaneToScreen(towardBottom, .landscapeRight), Vec2(1, 0))
+        XCTAssertEqual(Transforms.cameraPlaneToScreen(towardBottom, .landscapeLeft), Vec2(-1, 0))
+        for p in [Vec2(0.03, -0.05), Vec2(-0.01, 0.07)] {
+            let s = Transforms.cameraPlaneToScreen(p, .portrait)
+            XCTAssertEqual(Transforms.cameraPlaneToScreen(p, .landscapeRight), Vec2(s.y, -s.x))
+            XCTAssertEqual(Transforms.cameraPlaneToScreen(p, .landscapeLeft), Vec2(-s.y, s.x))
+            for o in ScreenOrientation.allCases {
+                XCTAssertEqual(Transforms.cameraPlaneToScreen(p, o).length, p.length, accuracy: 1e-12, "no scaling")
+            }
+        }
+    }
+
+    func testFrontCameraImageOrientations() {
+        XCTAssertEqual(Transforms.frontCameraImageOrientation(.portrait), 5, "leftMirrored, works on the iPhone 13")
+        XCTAssertEqual(Transforms.frontCameraImageOrientation(.landscapeRight), 4, "downMirrored")
+        XCTAssertEqual(Transforms.frontCameraImageOrientation(.landscapeLeft), 2, "upMirrored")
+        // The two landscape ways to hold the phone are half a turn apart.
+        XCTAssertEqual(Transforms.rotated180(exif: 4), 2)
+        XCTAssertEqual(Transforms.rotated180(exif: 5), 7)
+        for e: UInt32 in 1...8 {
+            XCTAssertNotEqual(Transforms.rotated180(exif: e), e)
+            XCTAssertEqual(Transforms.rotated180(exif: Transforms.rotated180(exif: e)), e)
         }
     }
 

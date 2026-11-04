@@ -102,8 +102,12 @@ print(String(format: "Screen %.0f x %.0f pt, tracking at %.0f fps, check distanc
 // logged have neither.
 for r in rows where r.kind == "tracking" {
     let lowPower = r.cells["low_power"] == "1" ? ", Low Power Mode on" : ""
+    // Screen and Vision orientation: files from before landscape (2026-11-05) are portrait and leftMirrored.
+    let screen = r.cells["screen_orientation"].map { $0.isEmpty ? "" : ", screen " + $0 } ?? ""
+    let vision = r.cells["vision_orientation"].map { $0.isEmpty ? "" : ", Vision " + $0 } ?? ""
     print(String(format: "At %.1f s: camera ", r.time) + (r.cells["video_format"] ?? "?")
-          + ", offered " + (r.cells["formats_offered"] ?? "?") + ", thermal " + (r.cells["thermal"] ?? "?") + lowPower + ".")
+          + ", offered " + (r.cells["formats_offered"] ?? "?") + ", thermal " + (r.cells["thermal"] ?? "?") + lowPower
+          + screen + vision + ".")
 }
 let processing = rows.compactMap { $0.d("proc_ms") }.sorted()
 if !processing.isEmpty {
