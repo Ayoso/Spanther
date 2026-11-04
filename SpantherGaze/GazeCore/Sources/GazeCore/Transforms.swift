@@ -88,10 +88,17 @@ public struct GazeFeatures: Sendable {
     public var leftEyeCamera: Vec3 = .zero
     public var rightEyeCamera: Vec3 = .zero
 
+    public init(lookAtHit: Vec2, eyeAxisHit: Vec2, yaw: Double, pitch: Double, roll: Double, distance: Double,
+                pupils: PupilOffsets?, leftEyeCamera: Vec3 = .zero, rightEyeCamera: Vec3 = .zero) {
+        self.lookAtHit = lookAtHit; self.eyeAxisHit = eyeAxisHit
+        self.yaw = yaw; self.pitch = pitch; self.roll = roll; self.distance = distance; self.pupils = pupils
+        self.leftEyeCamera = leftEyeCamera; self.rightEyeCamera = rightEyeCamera
+    }
+
     public enum FeatureSet: String, CaseIterable, Sendable {
-        /// Baseline from CLAUDE.md stage 1: lookAtPoint + head pose.
+        /// Baseline from CLAUDE.md stage 1: the lookAtPoint ray's hit on the screen.
         case lookAt
-        /// lookAtPoint + eye axes + head pose.
+        /// lookAtPoint + eye axes.
         case eyes
         /// Everything above plus pupil offsets from the image detector (stage 2 direction).
         case eyesAndPupils
@@ -115,15 +122,27 @@ public struct GazeFeatures: Sendable {
             leftEyeCamera: lo, rightEyeCamera: ro)
     }
 
-    /// Flat vector for the ridge model. Quadratic terms on the main ray let the model bend at the screen edges,
-    /// where uncalibrated lookAtPoint error is largest.
+    /// Flat vector for the ridge model. The first two entries are always the lookAtPoint hit (portrait metres),
+    /// which `RidgeModel.outOfRange` uses to spot a glance away from the screen. Quadratic terms on that ray let
+    /// the model bend at the screen edges, where uncalibrated lookAtPoint error is largest.
+    ///
+    /// Head pose (yaw, pitch, roll, distance) is deliberately not a feature. The hits are computed in camera space,
+    /// so they already move with the head and the phone. As separate features, the pose terms learned that the head
+    /// turns a little toward each calibration dot, and when the phone moved during a game the aim moved with it
+    /// (first iPhone session, 2026-11-04: the aim was over 1 cm off the screen 25% of the time in level 6).
+    ///
+    /// Missing pupils are NaN, not 0: the model treats NaN as "average", so a frame without a fresh pupil result
+    /// does not make the aim jump.
     public func vector(_ set: FeatureSet) -> [Double] {
         let a = lookAtHit
-        var v = [a.x, a.y, a.x * a.x, a.y * a.y, a.x * a.y, yaw, pitch, roll, distance]
+        var v = [a.x, a.y, a.x * a.x, a.y * a.y, a.x * a.y]
         if set != .lookAt { v += [eyeAxisHit.x, eyeAxisHit.y] }
         if set == .eyesAndPupils {
-            let p = pupils
-            v += [((p?.leftU ?? 0) + (p?.rightU ?? 0)) / 2, ((p?.leftV ?? 0) + (p?.rightV ?? 0)) / 2]
+            if let p = pupils {
+                v += [(p.leftU + p.rightU) / 2, (p.leftV + p.rightV) / 2]
+            } else {
+                v += [.nan, .nan]
+            }
         }
         return v
     }

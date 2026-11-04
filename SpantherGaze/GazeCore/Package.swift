@@ -10,5 +10,8 @@ let package = Package(
     targets: [
         .target(name: "GazeCore"),
         .testTarget(name: "GazeCoreTests", dependencies: ["GazeCore"]),
+        // `swift run GazeReplay <session.csv>`: replays an exported session through the current GazeCore code.
+        // Not part of the app, which compiles only Sources/GazeCore.
+        .executableTarget(name: "GazeReplay", dependencies: ["GazeCore"]),
     ]
 )

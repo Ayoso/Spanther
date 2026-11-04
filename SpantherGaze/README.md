@@ -4,9 +4,9 @@ Native SPANTHER prototype: SwiftUI + SpriteKit + ARKit face tracking. Meteors fa
 
 ## Status
 
-- `GazeCore` (pure Swift) builds and its 35 unit tests pass with Swift 6.0 on Linux and in CI.
-- The app target compiles in GitHub Actions (Xcode 16.4 Release, and the newest Xcode on the runner in Debug), unsigned. A signed build to a real iPhone has not been done yet. Step-by-step Mac instructions (in Russian) are in the root README.
-- Nothing has run on an iPhone yet (CLAUDE.md rule 6).
+- `GazeCore` (pure Swift) builds and its 38 unit tests pass with Swift 6.0 on Linux and in CI.
+- The app target compiles in GitHub Actions (Xcode 16.4 Release, and the newest Xcode on the runner in Debug), unsigned. Step-by-step Mac instructions (in Russian) are in the root README, the Windows route is in `SIDELOAD.md`.
+- First run on a real iPhone: Aziz, iPhone 13, 2026-11-04, installed with Sideloadly, played to level 6. Check error 1.29 cm; tracking ran at 30 fps, not 60. The aim went wild from level 5 on, which led to the gaze model changes below (replayed on that session, not yet confirmed on the phone).
 - CI also runs the app in the iOS Simulator (job `simulator-smoke`): a Debug-only bot plays with the launch argument `-SpantherAutoplay eyes|touch`, the job checks that the app keeps running and that kills spend energy and reloads happen, and it pushes screenshots, session CSVs and logs to the `ci-screenshots` branch. Face tracking does not exist in the Simulator, so "eyes" there means the bot's gaze.
 
 ## Build and run on an iPhone
@@ -24,17 +24,28 @@ Unit tests: `cd GazeCore && swift test` (Mac or Linux). Camera code only works o
 | Module | Files | Notes |
 |---|---|---|
 | GazeCore | `GazeCore/Sources/GazeCore` | Matrices, coordinate transforms (all in `Transforms.swift`), gaze ray to screen plane, ridge calibration, One Euro, accuracy metrics, balance config, the full game model. No UIKit/ARKit. |
-| Tracking | `SpantherGaze/Tracking` | `FaceTracker` runs ARKit at 60 fps off the main thread. `PupilDetector` protocol with a Vision implementation; MediaPipe can be added behind the same protocol to compare on the same recordings. |
+| Tracking | `SpantherGaze/Tracking` | `FaceTracker` runs ARKit off the main thread and asks for a 60 fps video format (the first iPhone 13 session ran at 30 fps). `PupilDetector` protocol with a Vision implementation; MediaPipe can be added behind the same protocol to compare on the same recordings. |
 | Screens | `SpantherGaze/Screens` | Menu, 9-dot calibration, 13-dot check (error and jitter in pt, cm and degrees), SpriteKit game, debug overlay. |
 | Logging | `SpantherGaze/Logging` | CSV exported only through the Share button: calibration/check samples, every tracked frame of an eye game (`frame`: features, gaze, raw `eyeBlinkLeft/Right`, gaze-hold flag), every meteor outcome, and `blink` / `energy` / `reload` events. |
 
 ## Gaze pipeline
 
 1. ARKit gives the face pose, both eye transforms and `lookAtPoint`. Two rays per eye (through `lookAtPoint`, and along the eye's own axis) are intersected with the screen plane (camera z = 0).
-2. Feature vector: both ray hits, quadratic terms, head yaw/pitch/roll, distance, and Vision pupil offsets when "Зрачки через Vision" is on.
+2. Feature vector: both ray hits, quadratic terms on the `lookAtPoint` hit, and Vision pupil offsets when "Зрачки через Vision" is on. A pupil result stays usable for 0.3 s; with none, the pupil features count as the calibration average. Head pose is not a feature: the hits already move with the head and the phone, and as separate features the pose terms made the aim follow the phone when it moved (see `GazeFeatures.vector`).
 3. 9 dots, about 1 s of samples each. The player is told they may move their head a little, which lowered error in the study cited in `docs/eye-tracking-options.md`.
-4. Ridge regression maps features to screen points; a One Euro filter smooths the result.
-5. 13 new dots measure mean error and jitter. The hit zone is drawn radius + that error, clamped to 30–115 pt.
+4. Ridge regression maps features to screen points; a One Euro filter smooths the result. Each feature is clamped to its calibrated range plus 25%, so the quadratic terms cannot throw the aim thousands of points away.
+5. When the `lookAtPoint` hit is further outside its calibrated range than the range itself, the player is looking away from the screen: the aim hides (`notLooking`) instead of flying off, and the filter restarts.
+6. 13 new dots measure mean error and jitter. The hit zone is drawn radius + that error, clamped to 30–115 pt.
+
+## Replaying a session (CLAUDE.md rule 7)
+
+Export the CSV on the phone (menu, «Экспорт CSV последней сессии»), then run the current GazeCore code over it:
+
+```
+cd GazeCore && swift run GazeReplay ~/Downloads/spanther-2026-11-05_01-13-16.csv
+```
+
+It refits the calibration for each feature set and prints the check error, how often the aim leaves the screen in each level, how often the player counted as looking away, and the blink detector's blinks and reloads next to the ones the app logged. Use it to compare tracking changes on the same recording instead of a new attempt. Session CSVs are face data: keep them out of the repository (rule 5).
 
 ## Gameplay (all from balance.json)
 
