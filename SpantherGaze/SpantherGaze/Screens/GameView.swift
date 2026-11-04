@@ -65,20 +65,23 @@ private struct HUDView: View {
                         }
                     }
                     pill { Text("Ур. \(hud.level)") }
+                    // Landscape: one row, so the meteors keep the height. The energy bar sits in it.
+                    if hud.energyMax > 0 {
+                        EnergyBar(energy: hud.energy, max: hud.energyMax, reloadProgress: hud.reloadProgress,
+                                  needsReload: hud.needsReload, pulse: hud.reloadCount, touchMode: touchMode, onTap: onEnergyTap)
+                            .frame(maxWidth: 320)
+                    }
                     Spacer()
                     Button { paused = true } label: { pill { Image(systemName: "pause.fill") } }
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 54)
-                if hud.energyMax > 0 {
-                    EnergyBar(energy: hud.energy, max: hud.energyMax, reloadProgress: hud.reloadProgress,
-                              needsReload: hud.needsReload, pulse: hud.reloadCount, touchMode: touchMode, onTap: onEnergyTap)
-                        .padding(.horizontal, 14)
-                }
+                // The front camera's notch is on the left.
+                .padding(.leading, 56)
+                .padding(.trailing, 20)
+                .padding(.top, 10)
                 Spacer()
                 if hud.needsReload && !paused && !hud.lookBack {
                     ReloadHint(touchMode: touchMode, progress: hud.reloadProgress, needed: hud.reloadNeeded)
-                        .padding(.bottom, 150)
+                        .padding(.bottom, 80)
                 }
             }
             if let b = hud.banner {
@@ -99,8 +102,9 @@ private struct HUDView: View {
                     Button(action: onQuit) { Text("Главное меню").frame(maxWidth: .infinity) }.buttonStyle(SecondaryButton())
                 }
                 .padding(22)
+                .frame(maxWidth: 360)
                 .background(Palette.panel, in: RoundedRectangle(cornerRadius: 18))
-                .padding(28)
+                .padding(16)
             }
         }
     }

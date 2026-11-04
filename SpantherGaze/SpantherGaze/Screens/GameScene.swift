@@ -71,21 +71,33 @@ final class GameScene: SKScene {
         let m = GameModel(config: config, screen: Vec2(size.width, size.height), marginPt: marginPt)
         model = m
         addStars()
-        let earth = SKShapeNode(circleOfRadius: m.earthRadius)
-        earth.position = sk(m.earthCenter)
+        // Earth: only the cap that shows above the bottom edge. In landscape the whole circle would be about
+        // 3,100 pt across.
+        let cap = CGMutablePath()
+        let steps = 64
+        for i in 0...steps {
+            let x = -20 + (Double(size.width) + 40) * Double(i) / Double(steps)
+            let p = sk(Vec2(x, m.earthSurfaceY(atX: x)))
+            if i == 0 { cap.move(to: p) } else { cap.addLine(to: p) }
+        }
+        cap.addLine(to: CGPoint(x: size.width + 20, y: -20))
+        cap.addLine(to: CGPoint(x: -20, y: -20))
+        cap.closeSubpath()
+        let earth = SKShapeNode(path: cap)
         earth.fillColor = UIColor(red: 0.18, green: 0.45, blue: 0.95, alpha: 1)
         earth.strokeColor = UIColor(red: 0.55, green: 0.75, blue: 1, alpha: 0.6)
-        earth.lineWidth = 10
-        earth.glowWidth = 14
+        earth.lineWidth = 8
+        earth.glowWidth = 6
         earth.name = "earth"
         world.addChild(earth)
-        for i in 0..<9 {  // continents
-            let c = SKShapeNode(ellipseOf: CGSize(width: m.earthRadius * (0.25 + 0.05 * Double(i % 3)), height: m.earthRadius * 0.12))
+        for i in 0..<7 {  // continents along the arc, tilted with it
+            let x = Double(size.width) * (Double(i) + 0.5) / 7
+            let slope = (x - m.earthCenter.x) / max(1, (m.earthRadius * m.earthRadius - pow(x - m.earthCenter.x, 2)).squareRoot())
+            let c = SKShapeNode(ellipseOf: CGSize(width: 50 + 30 * Double(i % 3), height: 14))
             c.fillColor = UIColor(red: 0.25, green: 0.68, blue: 0.42, alpha: 1)
             c.strokeColor = .clear
-            let a = Double.pi / 2 + (Double(i) - 4) * 0.22
-            c.position = CGPoint(x: cos(a) * m.earthRadius * 0.82, y: sin(a) * m.earthRadius * 0.82)
-            c.zRotation = CGFloat(a - .pi / 2)
+            c.position = sk(Vec2(x + 12 * Double(i % 2), m.earthSurfaceY(atX: x) + 16 + 6 * Double(i % 2)))
+            c.zRotation = CGFloat(-atan(slope))
             earth.addChild(c)
         }
         reticle.strokeColor = Self.reticleColor

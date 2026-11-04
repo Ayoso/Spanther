@@ -27,6 +27,7 @@
     "advanceKillRatio": 0.8, "easeKillRatio": 0.5, "failEaseStep": 0.1
   },
   "pauseWhenFaceLostSec": 1.0,
+  "lockZoneScale": 1.4,
 
   "energy": {
     "max": 10,
