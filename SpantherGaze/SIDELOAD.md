@@ -1,24 +1,81 @@
-# Put SpantherGaze on an iPhone without a Mac
+# Как поставить SPANTHER на iPhone с Windows (без Mac)
 
-A GitHub Actions macOS runner compiles the app (no signing), and Sideloadly on Windows signs it with your free Apple ID and installs it over USB. Nothing here needs the paid Apple Developer Program.
+Приложение для iPhone можно собрать только на Mac. Поэтому его собирает Mac в GitHub Actions: после каждого пуша получается неподписанный файл `SpantherGaze-unsigned.ipa`. На Windows ты скачиваешь этот файл, а программа Sideloadly подписывает его твоим Apple ID и ставит на iPhone по кабелю. Платный аккаунт разработчика не нужен. Клонировать репозиторий и собирать что-то на Windows тоже не нужно.
 
-## 1. Get the unsigned .ipa
+Шаги сверены с [FAQ Sideloadly](https://sideloadly.io/faq), страницей [sideloadly.io](https://sideloadly.io) и [документацией Apple о режиме разработчика](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device) 4 ноября 2026 года.
 
-1. The code lives in the GitHub repo `Ayoso/Spanther`. Every push to `main` runs **iOS build** (`.github/workflows/ios.yml`): GazeCore unit tests, then an unsigned Release build for iPhone.
-2. Open the repo on GitHub → **Actions** → the latest green **iOS build** run → **Artifacts** → download `SpantherGaze-unsigned-ipa` and unzip it. You get `SpantherGaze-unsigned.ipa`.
-   You can also start a build by hand with **Run workflow**.
+## Что нужно
 
-## 2. Install with Sideloadly (Windows)
+- iPhone XS, XR или новее с iOS 16 или новее. iPhone 13 подходит.
+- ПК с Windows 10 или 11.
+- USB-кабель, который передаёт данные, а не только заряжает.
+- Apple ID. Бесплатного хватит. Если не хочешь вводить в Sideloadly основной Apple ID, заведи отдельный для тестов.
+- Вход на github.com в аккаунт с доступом к репозиторию `Ayoso/Spanther`: без входа GitHub не даёт скачивать сборки.
 
-1. Install iTunes and iCloud **from apple.com** (the web installers, not the Microsoft Store versions), then Sideloadly from sideloadly.io.
-2. Connect the iPhone by USB, unlock it and tap **Trust**.
-3. In Sideloadly drag in `SpantherGaze-unsigned.ipa`, type your Apple ID and press **Start**. Use a spare Apple ID if you prefer.
-4. On the iPhone: Settings → Privacy & Security → **Developer Mode** → on, restart (iOS 16+ asks for this once).
-5. Settings → General → VPN & Device Management → your Apple ID → **Trust**.
-6. Open SPANTHER and allow the camera.
+## 1. Программы для Windows
 
-## Limits of the free route
+1. **iTunes с сайта Apple**, не из Microsoft Store: https://www.apple.com/itunes/download/win64
+2. **iCloud с сайта Apple**, тоже не из Microsoft Store (ссылка со страницы Sideloadly): https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe
+3. **Sideloadly** для Windows, 64-битный установщик: https://sideloadly.io
 
-- The app stops opening after **7 days**; re-run Sideloadly to refresh it (Sideloadly can auto-refresh while the PC is on).
-- A free Apple ID can have **3** sideloaded apps at once and 10 new app IDs per week.
-- For testers beyond your own phone (TestFlight), you need the paid Apple Developer Program.
+Если iTunes или iCloud уже стоят из Microsoft Store, сначала удали их: Параметры → Приложения → Установленные приложения. Sideloadly работает только с версиями с сайта Apple. После установки перезагрузи компьютер.
+
+## 2. Сборка игры (.ipa)
+
+Какую сборку брать:
+- **Пока PR #1 не слит в `main`, бери сборку из PR #1** (ветка `claude/project-thread-1bxp8q`). Только в ней есть энергия и перезарядка морганием.
+- После слияния бери последнюю сборку ветки `main`.
+
+Как скачать:
+1. Войди на github.com.
+2. Открой список сборок «iOS build»:
+   - для PR #1: https://github.com/Ayoso/Spanther/actions/workflows/ios.yml?query=branch%3Aclaude%2Fproject-thread-1bxp8q
+   - для main: https://github.com/Ayoso/Spanther/actions/workflows/ios.yml?query=branch%3Amain
+3. Открой верхнюю сборку с зелёной галочкой.
+4. Внизу страницы, в разделе **Artifacts**, нажми `SpantherGaze-unsigned-ipa`. Скачается архив `SpantherGaze-unsigned-ipa.zip`.
+5. Распакуй архив: правая кнопка мыши → «Извлечь все». Внутри лежит `SpantherGaze-unsigned.ipa`. Сам `.ipa` распаковывать не нужно.
+
+GitHub хранит сборки 30 дней. Если раздела Artifacts нет, запусти новую сборку: на странице https://github.com/Ayoso/Spanther/actions/workflows/ios.yml нажми **Run workflow**, выбери ветку и подожди несколько минут.
+
+## 3. Установка через Sideloadly
+
+1. Подключи iPhone кабелем к ПК и разблокируй его. На вопрос «Доверять этому компьютеру?» нажми «Доверять» и введи код телефона.
+2. Запусти Sideloadly. В поле **iDevice** должен появиться твой iPhone. Если его нет, смотри раздел «Если что-то не работает».
+3. Перетащи `SpantherGaze-unsigned.ipa` в окно Sideloadly.
+4. В поле **Apple account** введи свой Apple ID (почту).
+5. Нажми **Start** и введи пароль от Apple ID. Если включена двухфакторная проверка, на твои устройства Apple придёт код: введи его в Sideloadly.
+6. Не отключай телефон, пока Sideloadly не напишет **Done**. На iPhone появится значок SPANTHER.
+
+## 4. Настройки iPhone (один раз)
+
+1. **Режим разработчика.** Настройки → Конфиденциальность и безопасность → Режим разработчика (в самом низу списка) → включи → «Перезагрузить». После перезагрузки разблокируй iPhone, нажми «Включить» и введи код. Этот пункт появляется только после первой установки через Sideloadly. Если его нет, перезагрузи iPhone и проверь снова.
+2. **Доверие разработчику.** Настройки → Основные → VPN и управление устройством → в разделе «Приложение разработчика» нажми на свой Apple ID → «Доверять».
+3. Открой SPANTHER и разреши доступ к камере. Если случайно запретил: Настройки → SPANTHER → Камера, потом открой игру заново.
+
+## 5. Что проверить и что прислать
+
+Пройди список «Что проверить на телефоне» в [README](../README.md#что-проверить-на-телефоне). Для энергии и моргания главный пункт 6. Потом в меню нажми «Экспорт CSV последней сессии» и пришли файл: по нему подбираются пороги моргания. Ещё пришли модель iPhone, версию iOS (Настройки → Основные → Об этом устройстве) и скриншоты или запись экрана, если что-то не так.
+
+## 6. Через 7 дней и при обновлениях
+
+- С бесплатным Apple ID приложение перестаёт открываться через **7 дней**. Подключи iPhone и поставь `.ipa` через Sideloadly ещё раз с тем же Apple ID: подпись обновится.
+- Новую версию игры ставь так же: скачай свежий `.ipa` и поставь поверх с тем же Apple ID. Перед этим экспортируй CSV, если он нужен.
+- Sideloadly умеет продлевать подпись сам: перед Start включи в Advanced options автоматическое обновление (automatic refresh). Продление срабатывает, когда ПК включён и видит iPhone по кабелю или по Wi-Fi.
+- Лимиты бесплатного Apple ID: на телефоне одновременно не больше **3** таких приложений и не больше **10** новых App ID за 7 дней.
+- Раздать игру другим тестировщикам через TestFlight можно только с платным Apple Developer Program.
+
+## Если что-то не работает
+
+- **Sideloadly не видит iPhone.** Переустанови iTunes и iCloud с сайта Apple (не из Microsoft Store) и перезагрузи ПК. Открой iTunes с подключённым телефоном и нажми «Доверять» на iPhone. Попробуй другой кабель или другой USB-порт.
+- **Ошибка lockdownd** (`LOCKDOWN_E_INVALID_HOST_ID`). Нажми «Доверять» на iPhone и перезагрузи ПК, не отключая телефон.
+- **Ошибка anisette** (`500 INTERNAL SERVER ERROR`). Это временный сбой сервера: повтори позже или переключи Anisette на Local в настройках Sideloadly (Advanced).
+- **Ошибка про недоступный Bundle ID или App ID.** В Advanced options задай свой Bundle ID, например `com.ayoso.spanther`. Выбери его один раз и больше не меняй, иначе будешь тратить лимит App ID.
+- **Ошибка подписи.** Проверь, что дата и время верные и на ПК, и на телефоне.
+- **Кончился лимит App ID.** Подожди несколько дней или используй другой Apple ID.
+- **При запуске «Режим разработчика обязателен» или «Ненадёжный разработчик».** Проверь, не пропущен ли шаг 4.
+
+## Для разработчиков
+
+- Сборки делает `.github/workflows/ios.yml`. Каждый пуш в `main`, каждый pull request и ручной запуск (Run workflow) запускают тесты GazeCore, неподписанную Release-сборку для iPhone с проверкой `.ipa` и прогон в симуляторе.
+- Скриншоты последнего прогона в симуляторе, CSV и логи лежат в ветке `ci-screenshots`: по ним видно экраны без телефона и без Mac.
+- Если рядом есть Mac, можно поставить игру из Xcode: шаги в [README](../README.md).

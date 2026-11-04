@@ -44,4 +44,5 @@ enum Palette {
     static let gaze = Color(red: 0.44, green: 0.94, blue: 0.88)
     static let fire = Color(red: 1.0, green: 0.70, blue: 0.28)
     static let dim = Color(red: 0.60, green: 0.64, blue: 0.78)
+    static let hot = Color(red: 1.0, green: 0.35, blue: 0.21)
 }

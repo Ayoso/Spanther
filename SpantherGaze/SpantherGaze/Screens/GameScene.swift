@@ -8,6 +8,15 @@ final class GameHUD: ObservableObject {
     @Published var level = 1
     @Published var lookBack = false
     @Published var banner: String?
+    @Published var energy = 0
+    @Published var energyMax = 0
+    /// Looking at a meteor the pool cannot pay for, or the pool is empty: show the reload hint.
+    @Published var needsReload = false
+    /// Blinks (or taps) counted toward the next reload, and how many a reload takes.
+    @Published var reloadProgress = 0
+    @Published var reloadNeeded = 3
+    /// Bumped on every reload so the HUD can pulse.
+    @Published var reloadCount = 0
 }
 
 /// Draws GameModel. Model space is screen pt with y down; SpriteKit is y up, so `sk(_:)` flips.
@@ -17,6 +26,13 @@ final class GameScene: SKScene {
     var marginPt = 30.0
     var config: BalanceConfig!
     var onRecord: ((AsteroidRecord) -> Void)?
+    /// Returns true once per finished 3-blink reload (AppModel.consumeBlinkReload).
+    var blinkReload: () -> Bool = { false }
+    /// Blinks counted toward the next reload, for the HUD.
+    var pendingBlinks: () -> Int = { 0 }
+    /// CSV event rows: kind ("energy" per kill, "reload", "level" for a new level, "restart" when shields ran
+    /// out), the energy left after it, and the level it happened on.
+    var onGameEvent: ((_ kind: String, _ energy: Int, _ level: Int) -> Void)?
     let hud = GameHUD()
     var paused_ = false
 
@@ -24,10 +40,22 @@ final class GameScene: SKScene {
     private let world = SKNode()
     private var rocks: [Int: RockNode] = [:]
     private let reticle = SKShapeNode(circleOfRadius: 14)
+    private static let reticleColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.7)
+    private static let reticleStarvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.85)
+    private var reticleStarved = false
     private var touchPoint: Vec2?
     private var lastTime: TimeInterval = 0
     private let boomHaptic = UIImpactFeedbackGenerator(style: .medium)
     private let hitHaptic = UINotificationFeedbackGenerator()
+    private var tapBurst = BurstCounter(count: 3, windowSec: 2)
+
+    #if DEBUG
+    /// Bot for the Simulator smoke test (see AppModel.autoplay).
+    var autoplay = false
+    private var botDrySince: Double?
+    private var botNextPress = 0.0
+    private var botBlinks = 0
+    #endif
 
     override func didMove(to view: SKView) {
         backgroundColor = UIColor(red: 0.027, green: 0.043, blue: 0.11, alpha: 1)
@@ -60,12 +88,42 @@ final class GameScene: SKScene {
             c.zRotation = CGFloat(a - .pi / 2)
             earth.addChild(c)
         }
-        reticle.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.7)
+        reticle.strokeColor = Self.reticleColor
         reticle.lineWidth = 2
         reticle.zPosition = 50
         reticle.isHidden = true
         world.addChild(reticle)
         hud.shields = m.shields; hud.level = m.level; hud.score = 0
+        hud.energy = m.energy; hud.energyMax = m.energyMax
+        if let e = config.energy {
+            tapBurst = BurstCounter(count: e.touchReloadTaps, windowSec: e.reloadWindowSec)
+            hud.reloadNeeded = useTouch ? e.touchReloadTaps : e.reloadBlinks
+        }
+        _ = blinkReload()   // drop a reload blinked on the menu
+    }
+
+    /// Touch mode: one tap on the energy bar. Three inside the window reload.
+    func reloadTap() {
+        guard useTouch, let m = model else { return }
+        let now = CACurrentMediaTime()
+        if tapBurst.press(at: now) { doReload(m) }
+        hud.reloadProgress = tapBurst.pending(at: now)
+    }
+
+    private func doReload(_ m: GameModel) {
+        guard m.reload() else { return }
+        hitHaptic.notificationOccurred(.success)
+        hud.energy = m.energy
+        hud.reloadCount += 1
+        onGameEvent?("reload", m.energy, m.level)
+        let wave = SKShapeNode(circleOfRadius: 30)
+        wave.position = CGPoint(x: size.width / 2, y: size.height - 120)
+        wave.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 1)
+        wave.lineWidth = 6
+        wave.glowWidth = 8
+        wave.zPosition = 60
+        world.addChild(wave)
+        wave.run(.sequence([.group([.scale(to: 9, duration: 0.6), .fadeOut(withDuration: 0.6)]), .removeFromParent()]))
     }
 
     private func addStars() {
@@ -84,8 +142,22 @@ final class GameScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         let dt = lastTime == 0 ? 0 : currentTime - lastTime
         lastTime = currentTime
+        let reloadBlinked = blinkReload()
         guard let m = model, !paused_ else { return }
-        let gaze: GazeInput = useTouch ? (touchPoint.map { .point($0) } ?? .notLooking) : gazeSource()
+        var botGaze: GazeInput?
+        #if DEBUG
+        if autoplay { botGaze = botStep(m) }
+        #endif
+        if botGaze == nil {
+            if !useTouch {
+                if reloadBlinked { doReload(m) }
+                let pb = pendingBlinks()
+                if hud.reloadProgress != pb { hud.reloadProgress = pb }
+            } else if hud.reloadProgress > 0, tapBurst.pending(at: CACurrentMediaTime()) == 0 {
+                hud.reloadProgress = 0
+            }
+        }
+        let gaze: GazeInput = botGaze ?? (useTouch ? (touchPoint.map { .point($0) } ?? .notLooking) : gazeSource())
 
         for e in m.update(dt: dt, gaze: gaze) {
             switch e {
@@ -98,6 +170,11 @@ final class GameScene: SKScene {
                 rocks.removeValue(forKey: a.id)?.removeFromParent()
                 hud.score = m.score
                 onRecord?(rec)
+            case .energySpent(_, let left):
+                hud.energy = left
+                onGameEvent?("energy", left, m.level)
+            case .starved:
+                break
             case .hitEarth(let a, let rec):
                 impact(at: sk(a.position), radius: CGFloat(a.radius))
                 rocks.removeValue(forKey: a.id)?.removeFromParent()
@@ -107,9 +184,13 @@ final class GameScene: SKScene {
                 rocks.values.forEach { $0.removeFromParent() }
                 rocks.removeAll()
                 hud.shields = m.shields
+                hud.energy = m.energy
+                onGameEvent?("restart", m.energy, lvl)
                 flash("Щиты кончились. Уровень \(lvl) ещё раз")
             case .levelEnded(_, let ratio, let next):
                 hud.level = next
+                hud.energy = m.energy
+                onGameEvent?("level", m.energy, next)
                 flash(String(format: "Сбито %.0f%% · Уровень %d", ratio * 100, next))
             case .pausedForFace(let on):
                 hud.lookBack = on
@@ -117,16 +198,51 @@ final class GameScene: SKScene {
         }
 
         for a in m.asteroids { rocks[a.id]?.sync(a, at: sk(a.position)) }
+        if hud.needsReload != m.needsReload { hud.needsReload = m.needsReload }
 
         if case .point(let p) = gaze {
             reticle.isHidden = false
             reticle.position = sk(p)
             let r = useTouch ? 14 : max(10, marginPt * 0.5)
             reticle.setScale(r / 14)
+            // In eye mode the aim is about as big as the meteor's ring and sits right on it, so it would hide
+            // the red "no energy" ring. The aim turns red as well while it rests on a meteor the pool can't pay for.
+            if reticleStarved != m.starved {
+                reticleStarved = m.starved
+                reticle.strokeColor = m.starved ? Self.reticleStarvedColor : Self.reticleColor
+            }
         } else {
             reticle.isHidden = true
         }
     }
+
+    #if DEBUG
+    /// Looks at the lowest meteor, even one it cannot afford (so the red ring and hint show). Two seconds
+    /// after running dry it "blinks" (eyes) or taps the energy bar (touch) every 0.4 s until it reloads.
+    private func botStep(_ m: GameModel) -> GazeInput {
+        // Like a player: reacts once a meteor is well into view (a third of the way down), then follows the lowest.
+        let target = m.asteroids.filter { $0.position.y > m.screen.y * 0.33 }.max { $0.position.y < $1.position.y }
+        if m.needsReload {
+            if botDrySince == nil { botDrySince = m.time; botBlinks = 0 }
+            if m.time - (botDrySince ?? m.time) > 2, m.time >= botNextPress {
+                botNextPress = m.time + 0.4
+                if useTouch {
+                    reloadTap()
+                } else {
+                    botBlinks += 1
+                    hud.reloadProgress = botBlinks
+                    if botBlinks >= hud.reloadNeeded { botBlinks = 0; hud.reloadProgress = 0; doReload(m) }
+                }
+            }
+        } else {
+            botDrySince = nil
+            botBlinks = 0
+            if hud.reloadProgress != 0 { hud.reloadProgress = 0 }
+        }
+        touchPoint = useTouch ? target?.position : nil
+        return target.map { .point($0.position) } ?? .notLooking
+    }
+    #endif
 
     private func flash(_ s: String) {
         hud.banner = s
@@ -229,13 +345,23 @@ final class RockNode: SKNode {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    private static let gazeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.18)
+    private static let starvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.75)
+
+    private var showsStarved = false
+
     func sync(_ a: Asteroid, at p: CGPoint) {
         position = p
+        // Looked at without enough energy: a red ring that says "reload first".
+        if a.isStarved != showsStarved {
+            showsStarved = a.isStarved
+            track.strokeColor = a.isStarved ? Self.starvedColor : Self.gazeColor
+        }
         body.zRotation = CGFloat(a.rotation)
         let t = CGFloat(min(1, a.progress))
         body.fillColor = UIColor(red: 0.45 + 0.55 * t, green: 0.33 - 0.1 * t, blue: 0.24 - 0.12 * t, alpha: 1)
         cracks.alpha = t < 0.5 ? 0 : (t - 0.5) * 2
-        track.isHidden = t <= 0
+        track.isHidden = t <= 0 && !a.isStarved
         if t > 0 {
             let path = CGMutablePath()
             path.addArc(center: .zero, radius: radius + 10, startAngle: .pi / 2, endAngle: .pi / 2 - t * 2 * .pi, clockwise: true)

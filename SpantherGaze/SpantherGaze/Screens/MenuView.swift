@@ -4,15 +4,25 @@ struct MenuView: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
+        // The smallest screens (iPhone SE, 4.7") cannot fit the whole menu with a warning on it: there it
+        // scrolls instead of clipping the title and the footer.
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView { content }
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 22) {
             Spacer()
             Text("SPANTHER")
                 .font(.system(size: 46, weight: .black, design: .rounded))
                 .tracking(4)
                 .foregroundStyle(LinearGradient(colors: [.white, Palette.fire], startPoint: .top, endPoint: .bottom))
-            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся.")
+            Text("Метеориты летят на Землю. Посмотри на метеорит и держи взгляд, пока он не взорвётся. Кончилась энергия? Моргни 3\u{00A0}раза.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Palette.dim)
+                .fixedSize(horizontal: false, vertical: true)
             sizes
             VStack(spacing: 12) {
                 Button {
@@ -31,6 +41,7 @@ struct MenuView: View {
                 VStack(spacing: 8) {
                     Text("Нет доступа к камере, поэтому игра не видит взгляд. Разреши камеру в настройках и открой игру заново.")
                         .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button("Открыть настройки") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
@@ -40,6 +51,7 @@ struct MenuView: View {
             if !app.eyeTrackingSupported {
                 Text("Этот iPhone не поддерживает отслеживание лица (нужен TrueDepth или чип A12 и новее). Доступна игра пальцем.")
                     .font(.footnote).multilineTextAlignment(.center).foregroundStyle(Palette.fire)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Toggle("Зрачки через Vision", isOn: $app.usePupils).font(.footnote).foregroundStyle(Palette.dim)
             Toggle("Отладка", isOn: $app.showDebug).font(.footnote).foregroundStyle(Palette.dim)

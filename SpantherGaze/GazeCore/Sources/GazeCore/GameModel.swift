@@ -21,6 +21,8 @@ public struct Asteroid: Sendable, Identifiable {
     /// 0...1, the ring around the asteroid.
     public var progress: Double = 0
     public var isTargeted = false
+    /// Looked at, but the energy pool cannot pay for this class: no progress until a reload.
+    public var isStarved = false
     public let spawnTime: Double
     public var firstLookTime: Double?
     public var slips = 0
@@ -44,6 +46,10 @@ public enum GameEvent: Sendable {
     case shieldsDepleted(restartLevel: Int)
     case levelEnded(level: Int, killRatio: Double, nextLevel: Int)
     case pausedForFace(Bool)
+    /// A kill spent energy; `left` is what remains.
+    case energySpent(cost: Int, left: Int)
+    /// The player is looking at an asteroid they cannot afford (true) or no longer is (false).
+    case starved(Bool)
 }
 
 /// SplitMix64, so tests can replay a game exactly.
@@ -73,6 +79,13 @@ public final class GameModel {
     public private(set) var destroyedThisLevel = 0
     public private(set) var reachedThisLevel = 0
     public private(set) var pausedForFace = false
+    /// Energy pool (only when `config.energy` is set; otherwise stays 0 and is ignored).
+    public private(set) var energy = 0
+    public var energyEnabled: Bool { config.energy != nil }
+    public var energyMax: Int { config.energy?.max ?? 0 }
+    /// True while the targeted asteroid costs more than the pool holds.
+    public private(set) var starved = false
+    public private(set) var reloadsThisLevel = 0
     /// Hit-zone margin E (screen pt). Set from the check screen, or a small value in touch mode.
     public var marginPt: Double
     public var time = 0.0
@@ -96,6 +109,31 @@ public final class GameModel {
         earthRadius = screen.x * 0.8
         earthCenter = Vec2(screen.x / 2, screen.y + earthRadius * 0.62)
         d = config.difficulty(level: 1)
+        energy = config.energy?.max ?? 0
+    }
+
+    /// Energy one kill of this asteroid costs (0 when the mechanic is off). Never more than a full pool,
+    /// so a mistuned balance.json cannot make a class impossible to kill.
+    public func cost(_ a: Asteroid) -> Int { cost(className: a.className) }
+    public func cost(className: String) -> Int {
+        guard let e = config.energy else { return 0 }
+        return min(e.cost(className), e.max)
+    }
+
+    /// Show the reload hint: looking at a meteor the pool cannot pay for, or not enough left for any class.
+    public var needsReload: Bool {
+        guard energyEnabled else { return false }
+        let cheapest = BalanceConfig.classOrder.map { cost(className: $0) }.min() ?? 1
+        return starved || energy < cheapest
+    }
+
+    /// The 3-blink (or 3-tap) reload: fills the pool. Returns false when it was already full.
+    @discardableResult
+    public func reload() -> Bool {
+        guard energyEnabled, energy < energyMax else { return false }
+        energy = energyMax
+        reloadsThisLevel += 1
+        return true
     }
 
     public var earthTopY: Double { earthCenter.y - earthRadius }
@@ -136,20 +174,33 @@ public final class GameModel {
             }
         }
 
+        // Energy: a target the pool cannot pay for does not charge.
+        var nowStarved = false
+        if let t = targetIndex, energyEnabled, cost(asteroids[t]) > energy {
+            nowStarved = true
+        }
+        if nowStarved != starved { starved = nowStarved; events.append(.starved(nowStarved)) }
+
         let brake = config.brake(level: level)
         var i = 0
         while i < asteroids.count {
             var a = asteroids[i]
-            let targeted = i == targetIndex
-            a.isTargeted = targeted
-            if targeted {
-                if a.firstLookTime == nil { a.firstLookTime = time }
+            let looked = i == targetIndex
+            a.isTargeted = looked
+            a.isStarved = looked && nowStarved
+            // Reaction time counts the first look, whether or not there is energy to spend on it.
+            if looked && a.firstLookTime == nil { a.firstLookTime = time }
+            if looked && !nowStarved {
                 a.progress += dt / a.dwellSec
+            } else if looked {
+                // Looked at but unaffordable: progress waits for the reload. It does not drain, and it is
+                // not an attention slip, so the parent report stays about attention, not energy.
             } else if !freezeProgress && a.progress > 0 {
                 a.progress = max(0, a.progress - dt / config.decayToZeroSec)
                 if a.progress == 0 { a.slips += 1 }
             }
-            let speed = targeted ? 1 - brake : 1
+            // The gaze brake works with or without energy: slowing the meteor buys time to reload.
+            let speed = looked ? 1 - brake : 1
             a.position = a.position + a.velocity * (dt * speed)
             a.rotation += dt * 0.6
 
@@ -159,6 +210,11 @@ public final class GameModel {
                 if let t = targetIndex, t > i { targetIndex = t - 1 }
                 score += 10 * (BalanceConfig.classOrder.firstIndex(of: a.className).map { $0 + 1 } ?? 1)
                 destroyedThisLevel += 1
+                if energyEnabled {
+                    let c = cost(a)
+                    energy = max(0, energy - c)
+                    events.append(.energySpent(cost: c, left: energy))
+                }
                 killStreak += 1
                 if killStreak >= config.rules.streakToHarden {
                     d = min(config.difficulty(level: level), d + config.rules.hardenStep)
@@ -230,6 +286,9 @@ public final class GameModel {
         killStreak = 0
         recentHits.removeAll()
         if !keepShields { shields = config.earthShields }
+        energy = energyMax
+        reloadsThisLevel = 0
+        starved = false
     }
 
     private func record(_ a: Asteroid, destroyed: Bool) -> AsteroidRecord {

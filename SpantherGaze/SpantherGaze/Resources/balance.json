@@ -26,5 +26,20 @@
     "streakToHarden": 6, "hardenStep": 0.05,
     "advanceKillRatio": 0.8, "easeKillRatio": 0.5, "failEaseStep": 0.1
   },
-  "pauseWhenFaceLostSec": 1.0
+  "pauseWhenFaceLostSec": 1.0,
+
+  "energy": {
+    "max": 10,
+    "costByClass": { "S": 1, "M": 2, "L": 3, "XL": 5 },
+    "reloadBlinks": 3,
+    "reloadWindowSec": 2.0,
+    "touchReloadTaps": 3,
+    "blink": {
+      "closeThreshold": 0.6, "openThreshold": 0.35,
+      "minClosedSec": 0.05, "maxClosedSec": 0.5,
+      "closeRise": 0.3, "openRise": 0.15, "freezeRise": 0.2,
+      "baselineWindowSec": 0.8, "baselineCap": 0.5,
+      "freezeThreshold": 0.35, "holdAfterOpenSec": 0.08, "maxLidHoldSec": 0.3
+    }
+  }
 }
