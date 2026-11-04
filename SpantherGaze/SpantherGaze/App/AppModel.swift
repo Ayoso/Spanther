@@ -92,12 +92,17 @@ final class AppModel: ObservableObject {
     private func logTracking() {
         let i = tracker.info
         logger.tracking(format: i.format, offered: i.offered, thermal: i.thermal, lowPower: i.lowPower,
-                        time: CACurrentMediaTime())
+                        screen: i.screen, vision: i.vision, time: CACurrentMediaTime())
     }
 
     var eyeTrackingSupported: Bool { FaceTracker.isSupported }
 
-    func startTracking() { if FaceTracker.isSupported { tracker.start() } }
+    /// The only way the app's screen is held (Info.plist: UIInterfaceOrientationLandscapeRight, front camera on the
+    /// left). Gaze calibration does not survive turning the phone half a turn, because the camera moves to the other
+    /// side of the screen, so the app does not offer the other landscape side.
+    static let screenOrientation = ScreenOrientation.landscapeRight
+
+    func startTracking() { if FaceTracker.isSupported { tracker.start(orientation: Self.screenOrientation) } }
 
     private func handle(_ s: TrackingSample) {
         lastSampleTime = s.timestamp

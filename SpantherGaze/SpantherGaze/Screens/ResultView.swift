@@ -4,27 +4,34 @@ struct ResultView: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Text("Калибровка готова").font(.title2.bold())
-            if let r = app.report {
-                HStack(spacing: 10) {
-                    stat(String(format: "%.0f pt", r.meanErrorPt), String(format: "%.2f см · %.1f°", r.meanErrorCm, r.meanErrorDeg), "средний промах")
-                    stat(String(format: "%.0f pt", r.jitterPt), String(format: "%.2f см · %.1f°", r.jitterCm, r.jitterDeg), "дрожание")
+        // Landscape: the numbers on the left, the buttons on the right, so it fits in 390 pt of height.
+        HStack(spacing: 28) {
+            VStack(spacing: 14) {
+                Text("Калибровка готова").font(.title2.bold())
+                if let r = app.report {
+                    HStack(spacing: 10) {
+                        stat(String(format: "%.0f pt", r.meanErrorPt), String(format: "%.2f см · %.1f°", r.meanErrorCm, r.meanErrorDeg), "средний промах")
+                        stat(String(format: "%.0f pt", r.jitterPt), String(format: "%.2f см · %.1f°", r.jitterCm, r.jitterDeg), "дрожание")
+                    }
+                    Text(verdict(r)).multilineTextAlignment(.center).foregroundStyle(Palette.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(String(format: "Зона попадания: радиус метеорита + %.0f pt", app.hitMarginPt))
+                        .font(.footnote).foregroundStyle(Palette.dim)
                 }
-                Text(verdict(r)).multilineTextAlignment(.center).foregroundStyle(Palette.dim)
-                Text(String(format: "Зона попадания: радиус метеорита + %.0f pt", app.hitMarginPt))
-                    .font(.footnote).foregroundStyle(Palette.dim)
             }
-            Button { app.route = .game } label: { Text("Играть").frame(maxWidth: .infinity) }
-                .buttonStyle(PrimaryButton())
-            Button { app.beginCalibration() } label: { Text("Откалибровать заново").frame(maxWidth: .infinity) }
-                .buttonStyle(SecondaryButton())
-            ShareLink(item: app.logURL) { Label("Экспорт CSV", systemImage: "square.and.arrow.up") }
-                .font(.footnote)
-            Spacer()
+            .frame(maxWidth: .infinity)
+            VStack(spacing: 12) {
+                Button { app.route = .game } label: { Text("Играть").frame(maxWidth: .infinity) }
+                    .buttonStyle(PrimaryButton())
+                Button { app.beginCalibration() } label: { Text("Откалибровать заново").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryButton())
+                ShareLink(item: app.logURL) { Label("Экспорт CSV", systemImage: "square.and.arrow.up") }
+                    .font(.footnote)
+            }
+            .frame(width: 260)
         }
-        .padding(24)
+        .padding(.horizontal, 48)
+        .padding(.vertical, 24)
     }
 
     private func verdict(_ r: AccuracyReport) -> String {

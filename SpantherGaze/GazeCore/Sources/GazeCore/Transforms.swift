@@ -5,7 +5,19 @@ import Foundation
 //  world  – ARKit world space, metres.
 //  camera – ARCamera local space, metres, in SENSOR orientation (landscape): +x along the sensor's long side,
 //           +y up in landscape, -z looking out of the camera. The screen is (approximately) the camera's z = 0 plane.
-//  screen – SwiftUI/UIKit points, portrait, origin top-left, y down.
+//  screen – SwiftUI/UIKit points, origin top-left, y down, in the orientation the app runs (`ScreenOrientation`).
+//           Since 2026-11-05 that is landscape with the front camera on the left.
+
+/// How the phone is held while the app runs. GazeCore does not import UIKit, so the app maps
+/// UIInterfaceOrientation onto this.
+public enum ScreenOrientation: String, Sendable, CaseIterable {
+    /// Front camera at the top.
+    case portrait
+    /// Front camera on the left (UIInterfaceOrientation.landscapeRight). The app's only orientation.
+    case landscapeRight
+    /// Front camera on the right (UIInterfaceOrientation.landscapeLeft).
+    case landscapeLeft
+}
 
 /// One tracked frame, already converted from ARKit/simd types by the Tracking adapter.
 public struct FaceFrame: Sendable {
@@ -19,20 +31,25 @@ public struct FaceFrame: Sendable {
     public var lookAtPoint: Vec3
     /// world <- camera
     public var cameraTransform: Mat4
+    /// How the phone was held, for the camera-plane -> screen axes step.
+    public var orientation: ScreenOrientation
     /// Pupil centres from an image detector (Vision or MediaPipe), already expressed as offsets
     /// inside each eye opening. nil when the detector had no fresh result.
     public var pupils: PupilOffsets?
 
     public init(timestamp: Double, faceTransform: Mat4, leftEyeTransform: Mat4, rightEyeTransform: Mat4,
-                lookAtPoint: Vec3, cameraTransform: Mat4, pupils: PupilOffsets? = nil) {
+                lookAtPoint: Vec3, cameraTransform: Mat4, orientation: ScreenOrientation, pupils: PupilOffsets? = nil) {
         self.timestamp = timestamp; self.faceTransform = faceTransform
         self.leftEyeTransform = leftEyeTransform; self.rightEyeTransform = rightEyeTransform
-        self.lookAtPoint = lookAtPoint; self.cameraTransform = cameraTransform; self.pupils = pupils
+        self.lookAtPoint = lookAtPoint; self.cameraTransform = cameraTransform; self.orientation = orientation
+        self.pupils = pupils
     }
 }
 
 /// Pupil position inside the eye opening: u along the eye (corner to corner), v across it,
-/// both divided by eye width. Image space, so the detector's orientation must be right.
+/// both divided by eye width. Image space, so the detector's orientation must be right. With the image stood
+/// upright for the player (`Transforms.frontCameraImageOrientation`), u runs along the screen's x and v along its y
+/// in every orientation, because the face is upright to the screen.
 public struct PupilOffsets: Sendable, Equatable {
     public var leftU: Double, leftV: Double, rightU: Double, rightV: Double
     public init(leftU: Double, leftV: Double, rightU: Double, rightV: Double) {
@@ -57,11 +74,48 @@ public enum Transforms {
         return Vec2(p.x, p.y)
     }
 
-    /// Camera-plane metres (sensor orientation) -> portrait screen axes in metres.
-    /// The front camera's sensor is landscape; in portrait, sensor +y maps to screen +x and sensor +x to screen +y.
-    /// Exact sign/axes still have to be checked on a device (debug overlay); calibration absorbs any residual
-    /// rotation or offset, because the ridge model sees both axes for each output.
-    public static func cameraPlaneToPortrait(_ p: Vec2) -> Vec2 { Vec2(-p.y, -p.x) }
+    /// Camera-plane metres (sensor axes) -> screen axes in metres: x right and y down as the player sees the screen,
+    /// origin at the camera. Camera +x runs from the front camera toward the bottom of the phone, camera +y is to the
+    /// right of it in portrait. Checked on the iPhone 13 (second session, portrait calibration, 2026-11-04): the hit's
+    /// camera y followed the dots' screen x (r = 0.92) and camera x their screen y (r = 0.99). Turning the phone turns
+    /// the screen axes with it. Before 2026-11-05 portrait features were logged as (-y, -x); the ridge model fits
+    /// either sign, so old session CSVs replay the same.
+    public static func cameraPlaneToScreen(_ p: Vec2, _ o: ScreenOrientation) -> Vec2 {
+        switch o {
+        case .portrait: return Vec2(p.y, p.x)
+        case .landscapeRight: return Vec2(p.x, -p.y)
+        case .landscapeLeft: return Vec2(-p.x, p.y)
+        }
+    }
+
+    /// EXIF orientation (the raw value of CGImagePropertyOrientation) that stands ARKit's front-camera image upright
+    /// for a player facing the screen held this way (CLAUDE.md rule 3). Portrait is 5 (leftMirrored): with it Vision
+    /// found pupils on 99-100% of frames on the iPhone 13. The landscape values come from Apple's Vision face tracking
+    /// sample for the front camera, which uses leftMirrored for portrait as well: camera on the left 4 (downMirrored),
+    /// camera on the right 2 (upMirrored). Not yet checked on a phone, so FaceTracker turns the image 180° when
+    /// Vision finds no face with it.
+    public static func frontCameraImageOrientation(_ o: ScreenOrientation) -> UInt32 {
+        switch o {
+        case .portrait: return 5
+        case .landscapeRight: return 4
+        case .landscapeLeft: return 2
+        }
+    }
+
+    /// The EXIF orientation of the same image turned 180°.
+    public static func rotated180(exif: UInt32) -> UInt32 {
+        switch exif {
+        case 1: return 3
+        case 3: return 1
+        case 2: return 4
+        case 4: return 2
+        case 5: return 7
+        case 7: return 5
+        case 6: return 8
+        case 8: return 6
+        default: return exif
+        }
+    }
 
     /// Head yaw, pitch, roll (radians) and distance (metres) of the face as seen from the camera.
     public static func headPose(_ f: FaceFrame) -> (yaw: Double, pitch: Double, roll: Double, distance: Double) {
@@ -77,9 +131,9 @@ public enum Transforms {
 /// Gaze features handed to the calibration model. Two ray sources are kept side by side so the
 /// baseline (lookAtPoint) and the eye-transform ray can be compared on the same recordings (rule 7).
 public struct GazeFeatures: Sendable {
-    /// Average of both eyes' ray through `lookAtPoint`, hitting the screen plane (portrait metres).
+    /// Average of both eyes' ray through `lookAtPoint`, hitting the screen plane (screen axes, metres from the camera).
     public var lookAtHit: Vec2
-    /// Average of both eyes' own +z axis ray, hitting the screen plane (portrait metres).
+    /// Average of both eyes' own +z axis ray, hitting the screen plane (screen axes, metres from the camera).
     public var eyeAxisHit: Vec2
     public var yaw: Double, pitch: Double, roll: Double, distance: Double
     public var pupils: PupilOffsets?
@@ -116,13 +170,13 @@ public struct GazeFeatures: Sendable {
         let r2 = Transforms.intersectScreenPlane(origin: ro, direction: rd) ?? r1
         let pose = Transforms.headPose(f)
         return GazeFeatures(
-            lookAtHit: Transforms.cameraPlaneToPortrait((l1 + r1) * 0.5),
-            eyeAxisHit: Transforms.cameraPlaneToPortrait((l2 + r2) * 0.5),
+            lookAtHit: Transforms.cameraPlaneToScreen((l1 + r1) * 0.5, f.orientation),
+            eyeAxisHit: Transforms.cameraPlaneToScreen((l2 + r2) * 0.5, f.orientation),
             yaw: pose.yaw, pitch: pose.pitch, roll: pose.roll, distance: pose.distance, pupils: f.pupils,
             leftEyeCamera: lo, rightEyeCamera: ro)
     }
 
-    /// Flat vector for the ridge model. The first two entries are always the lookAtPoint hit (portrait metres),
+    /// Flat vector for the ridge model. The first two entries are always the lookAtPoint hit (screen axes, metres),
     /// which `RidgeModel.outOfRange` uses to spot a glance away from the screen. Quadratic terms on that ray let
     /// the model bend at the screen edges, where uncalibrated lookAtPoint error is largest.
     ///

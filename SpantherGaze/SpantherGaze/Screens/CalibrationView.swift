@@ -27,24 +27,22 @@ struct CalibrationView: View {
                         .position(x: p.x, y: p.y)
                         .id(index)
                 }
-                VStack(spacing: 14) {
-                    if !started {
-                        intro
-                    } else {
-                        Text(message).font(.callout.bold()).foregroundStyle(Palette.dim)
-                            .multilineTextAlignment(.center).padding(.top, 8)
-                    }
-                    Spacer()
-                    if started {
-                        Button {
-                            app.cancelCollecting()
-                            app.route = .menu
-                        } label: { Text("Отмена").font(.footnote.bold()).padding(.horizontal, 18).padding(.vertical, 10) }
-                            .buttonStyle(SecondaryButton())
-                            .padding(.bottom, 24)
-                    }
+                if started {
+                    // Landscape: the dot rows sit at 10, 50 and 90% of a 390 pt high screen, so the text and the
+                    // button go between the dot columns (30% and 70% across), clear of every calibration and check dot.
+                    Text(message).font(.callout.bold()).foregroundStyle(Palette.dim)
+                        .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
+                        .frame(width: 240)
+                        .position(x: size.x * 0.3, y: 34)
+                    Button {
+                        app.cancelCollecting()
+                        app.route = .menu
+                    } label: { Text("Отмена").font(.footnote.bold()).padding(.horizontal, 18).padding(.vertical, 10) }
+                        .buttonStyle(SecondaryButton())
+                        .position(x: size.x * 0.7, y: size.y - 40)
+                } else {
+                    intro.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(20)
             }
             .task(id: started) {
                 guard started else { return }
@@ -55,25 +53,28 @@ struct CalibrationView: View {
     }
 
     private var intro: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 120)
+        VStack(spacing: 14) {
             Text(kind == .calibration ? "Научим игру твоим глазам" : "Проверка точности")
                 .font(.title2.bold())
             Text(kind == .calibration
-                 ? "Держи телефон примерно в 30 см от лица. Смотри на каждую точку, пока вокруг неё бежит кружок. Голову можно чуть-чуть поворачивать."
+                 ? "Держи телефон двумя руками примерно в 30 см от лица, камерой слева, и не закрывай её пальцем. Смотри на каждую точку, пока вокруг неё бежит кружок. Голову можно чуть-чуть поворачивать."
                  : "Ещё 13 точек в новых местах. По ним игра узнает, насколько точно видит твой взгляд.")
                 .multilineTextAlignment(.center).foregroundStyle(Palette.dim)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Circle().fill(status.faceFound ? Palette.gaze : Palette.fire).frame(width: 10, height: 10)
                 Text(status.faceFound ? "Лицо найдено" : "Не видно лица").font(.footnote)
             }
-            Button { started = true } label: { Text("Начать").frame(maxWidth: .infinity) }
-                .buttonStyle(PrimaryButton())
-                .disabled(!status.faceFound)
-            Button { app.route = .menu } label: { Text("Назад").frame(maxWidth: .infinity) }
-                .buttonStyle(SecondaryButton())
+            HStack(spacing: 12) {
+                Button { app.route = .menu } label: { Text("Назад").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryButton())
+                Button { started = true } label: { Text("Начать").frame(maxWidth: .infinity) }
+                    .buttonStyle(PrimaryButton())
+                    .disabled(!status.faceFound)
+            }
         }
-        .padding(8)
+        .frame(maxWidth: 520)
+        .padding(24)
     }
 
     @MainActor

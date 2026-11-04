@@ -14,6 +14,7 @@ final class SessionLogger {
         // Added after the first iPhone session; readers find columns by name, so older files still read.
         case processingMs = "proc_ms"
         case videoFormat = "video_format", formatsOffered = "formats_offered", thermal, lowPower = "low_power"
+        case screenOrientation = "screen_orientation", visionOrientation = "vision_orientation"
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -92,12 +93,15 @@ final class SessionLogger {
     /// A `tracking` row: the camera format the session runs, the formats the device offers, the thermal state
     /// and Low Power Mode. Written when a session starts and whenever the thermal state or Low Power Mode
     /// changes, so a session's frame rate can be explained from its CSV. The format strings hold no commas.
-    func tracking(format: String, offered: String, thermal: String, lowPower: Bool, time: Double) {
+    func tracking(format: String, offered: String, thermal: String, lowPower: Bool, screen: String, vision: String,
+                  time: Double) {
         var r = Row(kind: "tracking", time: time)
         r[.videoFormat] = format
         r[.formatsOffered] = offered
         r[.thermal] = thermal
         r[.lowPower] = lowPower ? "1" : "0"
+        r[.screenOrientation] = screen
+        r[.visionOrientation] = vision
         write(r.line)
     }
 
