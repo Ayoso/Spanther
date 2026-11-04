@@ -106,8 +106,12 @@ public final class GameModel {
         self.marginPt = marginPt
         self.rng = SeededRandom(seed: seed)
         shields = config.earthShields
-        earthRadius = screen.x * 0.8
-        earthCenter = Vec2(screen.x / 2, screen.y + earthRadius * 0.62)
+        // Earth is a low arc along the bottom edge through both bottom corners. Its top stands 15% of the screen
+        // height above the edge (about 60 pt in landscape), so the meteors keep most of the height. The circle
+        // through (±W/2, 0) and (0, h): R = (W²/4 + h²) / 2h.
+        let h = screen.y * 0.15
+        earthRadius = (screen.x * screen.x / 4 + h * h) / (2 * h)
+        earthCenter = Vec2(screen.x / 2, screen.y - h + earthRadius)
         d = config.difficulty(level: 1)
         energy = config.energy?.max ?? 0
     }
@@ -138,6 +142,13 @@ public final class GameModel {
 
     public var earthTopY: Double { earthCenter.y - earthRadius }
 
+    /// Earth's surface at screen x (pt, y down): earthTopY in the middle, the bottom edge at the corners.
+    public func earthSurfaceY(atX x: Double) -> Double {
+        let dx = x - earthCenter.x
+        let s = earthRadius * earthRadius - dx * dx
+        return s > 0 ? earthCenter.y - s.squareRoot() : earthCenter.y
+    }
+
     /// Distance of a point to an asteroid divided by the hit-zone radius (drawn radius + E). < 1 means inside.
     public func zoneRatio(_ p: Vec2, _ a: Asteroid) -> Double { p.distance(to: a.position) / (a.radius + marginPt) }
 
@@ -164,12 +175,14 @@ public final class GameModel {
         time += dt
         levelTime += dt
 
-        // Pick at most one target: the asteroid with the smallest distance / zone-radius ratio.
+        // Pick at most one target: the asteroid with the smallest distance / zone-radius ratio. One that is already
+        // charging counts with a zone `lockZone` times wider, so the lock holds while the aim wobbles (second iPhone
+        // session: small fast meteors in level 6 slipped out of the aim 4-5 times each).
         var targetIndex: Int?
         if let p = point {
             var best = 1.0
             for (i, a) in asteroids.enumerated() {
-                let r = zoneRatio(p, a)
+                let r = zoneRatio(p, a) / (a.progress > 0 ? config.lockZone : 1)
                 if r < best { best = r; targetIndex = i }
             }
         }
@@ -296,8 +309,8 @@ public final class GameModel {
                        lifetimeSec: time - a.spawnTime, slips: a.slips, destroyed: destroyed)
     }
 
-    /// Picks a class by the level's mix, places it with at least 2E horizontal spacing from other fresh asteroids,
-    /// and aims it at Earth so it arrives after the class's travel time.
+    /// Picks a class by the level's mix and an edge to come in from (see `entry`), and aims it at Earth so it
+    /// arrives after the class's travel time.
     public func spawn(className forced: String? = nil) -> Asteroid {
         let mix = config.classMix(level: level)
         var name = forced ?? "S"
@@ -311,15 +324,8 @@ public final class GameModel {
         }
         let cls = config.classes[name] ?? config.classes["S"]!
         let r = cls.sizePt / 2
-        let lo = r, hi = max(r + 1, screen.x - r)
-        var x = Double.random(in: lo...hi, using: &rng)
-        for _ in 0..<12 {
-            let crowded = asteroids.contains { $0.position.y < screen.y * 0.35 && abs($0.position.x - x) < 2 * marginPt }
-            if !crowded { break }
-            x = Double.random(in: lo...hi, using: &rng)
-        }
-        let start = Vec2(x, -r)
-        let aim = Vec2(earthCenter.x + (x - earthCenter.x) * 0.5, earthTopY)
+        let (start, aimX) = entry(radius: r)
+        let aim = Vec2(aimX, earthSurfaceY(atX: aimX))
         let path = aim - start
         let travel = BalanceConfig.lerp(cls.travelSec, d)
         let v = path * (1 / max(0.1, travel))
@@ -327,6 +333,42 @@ public final class GameModel {
                          damage: cls.damage, spawnTime: time, rotation: Double.random(in: 0..<6.28, using: &rng))
         nextId += 1
         return a
+    }
+
+    public enum Edge: Sendable { case top, left, right }
+
+    /// Where an asteroid of radius `r` comes in and the x of the Earth point it flies to. On a wide (landscape) screen
+    /// 20% come in from each side, from the upper half of the height, and fly to the near half of Earth; the rest
+    /// come in across the top and fly to a point halfway to the middle. A narrow screen only uses the top. Each keeps
+    /// at least 2E from other fresh asteroids on its edge.
+    func entry(radius r: Double, edge forced: Edge? = nil) -> (start: Vec2, aimX: Double) {
+        let w = screen.x, h = screen.y
+        var edge = forced ?? .top
+        if forced == nil, w > h {
+            let roll = Double.random(in: 0..<1, using: &rng)
+            edge = roll < 0.2 ? .left : roll < 0.4 ? .right : .top
+        }
+        func spaced(_ lo: Double, _ hi: Double, crowded: (Double) -> Bool) -> Double {
+            var v = Double.random(in: lo...max(lo + 1, hi), using: &rng)
+            for _ in 0..<12 where crowded(v) { v = Double.random(in: lo...max(lo + 1, hi), using: &rng) }
+            return v
+        }
+        switch edge {
+        case .top:
+            let x = spaced(r, w - r) { x in
+                self.asteroids.contains { $0.position.y < h * 0.35 && abs($0.position.x - x) < 2 * self.marginPt }
+            }
+            return (Vec2(x, -r), earthCenter.x + (x - earthCenter.x) * 0.5)
+        case .left, .right:
+            let left = edge == .left
+            let y = spaced(min(r, h * 0.1), h * 0.45) { y in
+                self.asteroids.contains {
+                    (left ? $0.position.x < w * 0.25 : $0.position.x > w * 0.75) && abs($0.position.y - y) < 2 * self.marginPt
+                }
+            }
+            let f = Double.random(in: 0.15...0.45, using: &rng)
+            return (Vec2(left ? -r : w + r, y), left ? w * f : w * (1 - f))
+        }
     }
 
     /// Test and debug hook: put an asteroid somewhere specific.

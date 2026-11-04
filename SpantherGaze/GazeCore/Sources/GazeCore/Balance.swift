@@ -44,6 +44,9 @@ public struct BalanceConfig: Codable, Sendable {
     public var adaptation: Adaptation?
     /// Freeze the game when the face has been lost this long (prototype addition, not in BALANCE.md).
     public var pauseWhenFaceLostSec: Double?
+    /// A meteor that is already charging keeps a hit zone this many times wider, so aim wobble does not drop it
+    /// (prototype addition, not in BALANCE.md). Default 1.4.
+    public var lockZoneScale: Double?
     /// Energy pool spent on kills and refilled by 3 blinks. nil turns the mechanic off (original BALANCE.md rules).
     public var energy: EnergyConfig?
 
@@ -55,6 +58,7 @@ public struct BalanceConfig: Codable, Sendable {
 
     public var levelCount: Int { levels ?? 10 }
     public var rules: Adaptation { adaptation ?? Adaptation() }
+    public var lockZone: Double { max(1, lockZoneScale ?? 1.4) }
 
     /// Smooth S-curve from BALANCE.md: d = t²(3 − 2t), t = (level − 1) / (levels − 1).
     public func difficulty(level: Int) -> Double {

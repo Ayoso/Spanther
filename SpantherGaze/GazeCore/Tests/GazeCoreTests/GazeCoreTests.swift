@@ -240,7 +240,8 @@ final class BalanceTests: XCTestCase {
 }
 
 final class GameModelTests: XCTestCase {
-    let screen = Vec2(390, 844)
+    /// iPhone 13 in landscape, the app's only orientation.
+    let screen = Vec2(844, 390)
 
     func parked(_ m: GameModel, _ cls: String, at p: Vec2) -> Asteroid {
         var a = m.spawn(className: cls)
@@ -339,6 +340,90 @@ final class GameModelTests: XCTestCase {
         XCTAssertFalse(m.pausedForFace)
     }
 
+    func testEarthIsALowArcThroughTheBottomCorners() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 20)
+        XCTAssertEqual(m.earthSurfaceY(atX: 0), 390, accuracy: 1e-6)
+        XCTAssertEqual(m.earthSurfaceY(atX: 844), 390, accuracy: 1e-6)
+        XCTAssertEqual(m.earthSurfaceY(atX: 422), 390 * 0.85, accuracy: 1e-6)
+        XCTAssertEqual(m.earthTopY, 390 * 0.85, accuracy: 1e-6)
+        XCTAssertLessThan(m.earthSurfaceY(atX: 200), m.earthSurfaceY(atX: 100))
+    }
+
+    /// Landscape: about 20% of meteors come in from each side and the rest across the top, all from just outside
+    /// the screen, and each flies onto Earth's surface in its class's travel time.
+    func testMeteorsComeFromTheTopAndBothSides() throws {
+        let c = try BalanceTests.config()
+        let m = GameModel(config: c, screen: screen, marginPt: 30, seed: 21)
+        var top = 0, left = 0, right = 0
+        for _ in 0..<1000 {
+            let a = m.spawn()
+            if a.position.y < 0 {
+                top += 1
+                XCTAssertEqual(a.position.y, -a.radius, accuracy: 1e-9)
+            } else if a.position.x < 0 {
+                left += 1
+                XCTAssertEqual(a.position.x, -a.radius, accuracy: 1e-9)
+            } else {
+                right += 1
+                XCTAssertEqual(a.position.x, 844 + a.radius, accuracy: 1e-9)
+            }
+            if a.position.y >= 0 { XCTAssertLessThanOrEqual(a.position.y, 390 * 0.45 + 1) }
+            let travel = BalanceConfig.lerp(try XCTUnwrap(c.classes[a.className]).travelSec, m.d)
+            let landing = a.position + a.velocity * travel
+            XCTAssertEqual(landing.y, m.earthSurfaceY(atX: landing.x), accuracy: 1e-6, "lands on Earth")
+            XCTAssertGreaterThanOrEqual(landing.x, 0)
+            XCTAssertLessThanOrEqual(landing.x, 844)
+        }
+        XCTAssertEqual(Double(left) / 1000, 0.2, accuracy: 0.05)
+        XCTAssertEqual(Double(right) / 1000, 0.2, accuracy: 0.05)
+        XCTAssertEqual(Double(top) / 1000, 0.6, accuracy: 0.06)
+    }
+
+    func testPortraitMeteorsOnlyComeFromTheTop() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: Vec2(390, 844), marginPt: 30, seed: 22)
+        for _ in 0..<200 { XCTAssertLessThan(m.spawn().position.y, 0) }
+    }
+
+    /// Left alone, a meteor reaches Earth after its class's travel time (level 1: S takes 6 s).
+    func testUnwatchedMeteorHitsEarthAfterItsTravelTime() throws {
+        for edge in [GameModel.Edge.top, .left, .right] {
+            let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 23)
+            let r = 32.0
+            let (start, aimX) = m.entry(radius: r, edge: edge)
+            var a = m.spawn(className: "S")
+            a.position = start
+            a.velocity = (Vec2(aimX, m.earthSurfaceY(atX: aimX)) - start) * (1 / 6.0)
+            m.insert(a)
+            var t = 0.0, hit: Double?
+            while hit == nil && t < 8 {
+                for e in m.update(dt: 1.0 / 60, gaze: .notLooking) {
+                    if case .hitEarth(let x, _) = e, x.id == a.id { hit = t }
+                }
+                t += 1.0 / 60
+            }
+            let h = try XCTUnwrap(hit, "\(edge)")
+            XCTAssertGreaterThan(h, 5.6, "\(edge)")
+            XCTAssertLessThan(h, 6.05, "\(edge)")
+        }
+    }
+
+    /// The lock: a meteor that is charging keeps charging while the aim is up to 1.4 zones away; a fresh meteor
+    /// needs the aim inside its normal zone.
+    func testChargingMeteorKeepsAWiderZone() throws {
+        let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 24)
+        let a = parked(m, "S", at: Vec2(300, 200))   // radius 32, zone 62, lock zone 86.8
+        m.update(dt: 0.1, gaze: .point(Vec2(300, 200)))
+        let p0 = m.asteroids.first { $0.id == a.id }!.progress
+        XCTAssertEqual(p0, 0.2, accuracy: 1e-9)
+        m.update(dt: 0.1, gaze: .point(Vec2(300 + 80, 200)))
+        XCTAssertEqual(m.asteroids.first { $0.id == a.id }!.progress, 0.4, accuracy: 1e-9, "80 pt: still locked")
+        m.update(dt: 0.1, gaze: .point(Vec2(300 + 90, 200)))
+        XCTAssertLessThan(m.asteroids.first { $0.id == a.id }!.progress, 0.4, "90 pt: past the lock zone, drains")
+        let b = parked(m, "S", at: Vec2(600, 200))
+        m.update(dt: 0.1, gaze: .point(Vec2(600 + 80, 200)))
+        XCTAssertEqual(m.asteroids.first { $0.id == b.id }!.progress, 0, "a fresh meteor needs the normal zone")
+    }
+
     func testSimulatedLevelOneIsWinnableWithPerfectGaze() throws {
         // A bot that looks at the lowest asteroid should clear level 1 (BALANCE.md target: >= 90%).
         let m = GameModel(config: try BalanceTests.config(), screen: screen, marginPt: 30, seed: 10)
@@ -359,7 +444,8 @@ final class GameModelTests: XCTestCase {
 }
 
 final class EnergyTests: XCTestCase {
-    let screen = Vec2(390, 844)
+    /// iPhone 13 in landscape, the app's only orientation.
+    let screen = Vec2(844, 390)
 
     func testBalanceJsonHasEnergyDefaults() throws {
         let e = try XCTUnwrap(try BalanceTests.config().energy)
