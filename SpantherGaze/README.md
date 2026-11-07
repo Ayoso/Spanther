@@ -56,8 +56,13 @@ It refits the calibration for each feature set and prints the check error, how o
 - "Играть пальцем" uses the same rules with a finger on the meteor.
 - Energy pool of 10; a kill costs S 1, M 2, L 3, XL 5. A meteor you cannot afford gets a red ring, the aim on it turns red, and it makes no progress. Three blinks within 2 s (or three taps on the energy bar in touch mode) refill the pool. `BlinkDetector` in `GazeCore/Energy.swift` reads ARKit `eyeBlinkLeft/Right`; while the lids close the gaze point is held so the aim does not dip.
 
+## Wink test (groundwork for the rhythm mode)
+
+Menu, «Тест подмигиваний». A click sounds every second and the screen lights the eye to wink on it: 20 left, 20 right, then 20 alternating, about 72 s. The result screen shows, per eye, how many cues the detector caught on the asked eye, the mean timing offset and its spread, how many hits land within ±100, ±180 and ±250 ms once that offset is removed, and how far the other eye squinted. «Отправить CSV» exports the session. `WinkDetector` in `GazeCore/Wink.swift` reads the same ARKit `eyeBlinkLeft/Right` values as the reload blinks: an eye is closed at 0.6 or its open level + 0.3, and both eyes closing within 50 ms is a blink, not a wink. `GazeReplay` reads the test's `wink_frame`, `cue` and `wink` rows and replays the detector at close thresholds 0.5, 0.6 and 0.7 on the same run.
+
 ## Unverified on device
 
 - The portrait axis mapping in `Transforms.cameraPlaneToPortrait` and the Vision image orientation `.leftMirrored` are best guesses. Calibration absorbs axis mix-ups, but check them in the debug overlay.
 - 60 pt per cm is assumed for cm figures (current iPhones are 60–64).
 - Blink thresholds (0.6 closed, 0.35 open, 50–500 ms) are starting values and need tuning on real faces, children's especially.
+- Winks: whether ARKit's `eyeBlinkLeft` is the player's left eye, how much the other eye closes during a wink, and the delay from a click to the wink onset. The wink test measures all three.

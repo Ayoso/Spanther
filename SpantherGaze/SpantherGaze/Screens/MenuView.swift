@@ -57,6 +57,9 @@ struct MenuView: View {
             Toggle("Отладка", isOn: $app.showDebug).font(.footnote).foregroundStyle(Palette.dim)
             ShareLink(item: app.logURL) { Label("Экспорт CSV последней сессии", systemImage: "square.and.arrow.up") }
                 .font(.footnote)
+            Button { app.beginWinkTest() } label: { Label("Тест подмигиваний", systemImage: "eye.slash") }
+                .font(.footnote)
+                .disabled(!app.eyeTrackingSupported)
             Spacer()
             Text("Изображение с камеры остаётся на телефоне.").font(.footnote).foregroundStyle(Palette.dim)
         }
