@@ -1,0 +1,1 @@
+1 start, 1 end, 95 notes, 81 played, 14 missed, 95 judged, accuracy 0.85, learned delay 113 ms, score 9830

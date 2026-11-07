@@ -1,0 +1,1 @@
+1 run, 60 cues, 67 closures, 6147 frames, hits left 27/30 right 24/30, wrong eye 3, both eyes 3

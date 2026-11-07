@@ -1,0 +1,18 @@
+PASS menu: app running
+PASS eyes: app running after 60 s
+PASS eyes: 45 meteors logged
+PASS eyes: 45 kills spent energy
+PASS eyes: pool ran dry and was reloaded 5 times
+PASS eyes: level 1 ended
+PASS eyes: energy accounting matches balance.json
+PASS touch: app running after 60 s
+PASS touch: 35 meteors logged
+PASS touch: 35 kills spent energy
+PASS touch: pool ran dry and was reloaded 4 times
+PASS touch: level 1 ended
+PASS touch: energy accounting matches balance.json
+PASS wink: app running after the test
+PASS wink: 1 run, 60 cues, 67 closures, 6147 frames, hits left 27/30 right 24/30, wrong eye 3, both eyes 3
+PASS rhythm: app running after the track
+PASS rhythm: 1 start, 1 end, 95 notes, 81 played, 14 missed, 95 judged, accuracy 0.85, learned delay 113 ms, score 9830
+PASS menu on iPhone SE: app running
