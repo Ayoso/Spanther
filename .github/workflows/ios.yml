@@ -58,6 +58,11 @@ jobs:
             value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$APP/Info.plist")
             echo "$key: $value"
           done
+          # App Store Connect refuses a build without an app icon (Assets.xcassets/AppIcon).
+          grep -q " Payload/SpantherGaze.app/Assets.car$" ipa-files.txt
+          ICON=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName" "$APP/Info.plist")
+          echo "App icon: $ICON"
+          test "$ICON" = AppIcon
           ls -l SpantherGaze-unsigned.ipa
       - uses: actions/upload-artifact@v4
         with:
