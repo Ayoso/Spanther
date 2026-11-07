@@ -569,7 +569,9 @@ final class AppModel: ObservableObject {
         model = RidgeModel.fit(features: X, targets: Y, lambda: 0.01, featureSet: featureSet.rawValue)
         filter.reset()
         // The adapter's tilt terms are measured from the grip the model was fitted at.
-        adapter = model == nil ? nil : HeadPose.mean(calibrationSet.flatMap { $0.features }).map { GazeAdapter(reference: $0) }
+        let calibrated = calibrationSet.flatMap { $0.features }
+        let distanceM = calibrated.isEmpty ? 0.28 : calibrated.map(\.distance).reduce(0, +) / Double(calibrated.count)
+        adapter = model == nil ? nil : HeadPose.mean(calibrated).map { GazeAdapter(reference: $0, distanceM: distanceM) }
         route = model == nil ? .menu : .check
     }
 

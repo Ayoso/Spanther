@@ -254,27 +254,47 @@ if let reference = HeadPose.mean(poseRows) {
         }
     }
     if !labels.isEmpty {
-        var adapter = GazeAdapter(reference: reference)
+        let calibrationDistance = poseRows.map(\.distance).reduce(0, +) / Double(poseRows.count)
+        typealias Sums = [String: (Double, Double, Double)]
         // [source or pitch bin: (weight, error without, error with)]
-        var bySource: [String: (Double, Double, Double)] = [:], byPitch: [String: (Double, Double, Double)] = [:]
-        for l in labels.sorted(by: { $0.time < $1.time }) {
-            let without = l.raw.distance(to: l.target), with = adapter.correct(l.raw, pose: l.pose).distance(to: l.target)
-            let deg = abs(l.pose.pitch - reference.pitch) * 180 / Double.pi
-            let bin = deg < 3 ? "pitch within 3°" : deg < 6 ? "pitch 3-6° off" : "pitch over 6° off"
-            for key in [l.source] {
-                let s = bySource[key] ?? (0, 0, 0)
-                bySource[key] = (s.0 + l.weight, s.1 + l.weight * without, s.2 + l.weight * with)
+        func replay(_ config: GazeAdapterConfig) -> (bySource: Sums, byPitch: Sums, adapter: GazeAdapter) {
+            var adapter = GazeAdapter(reference: reference, distanceM: calibrationDistance, config: config)
+            var bySource: Sums = [:], byPitch: Sums = [:]
+            for l in labels.sorted(by: { $0.time < $1.time }) {
+                let without = l.raw.distance(to: l.target), with = adapter.correct(l.raw, pose: l.pose).distance(to: l.target)
+                let deg = abs(l.pose.pitch - reference.pitch) * 180 / Double.pi
+                let bin = deg < 3 ? "pitch within 3°" : deg < 6 ? "pitch 3-6° off" : "pitch over 6° off"
+                let s = bySource[l.source] ?? (0, 0, 0)
+                bySource[l.source] = (s.0 + l.weight, s.1 + l.weight * without, s.2 + l.weight * with)
+                let p = byPitch[bin] ?? (0, 0, 0)
+                byPitch[bin] = (p.0 + l.weight, p.1 + l.weight * without, p.2 + l.weight * with)
+                adapter.learn(raw: l.raw, target: l.target, pose: l.pose, time: l.time, weight: l.weight)
             }
-            let p = byPitch[bin] ?? (0, 0, 0)
-            byPitch[bin] = (p.0 + l.weight, p.1 + l.weight * without, p.2 + l.weight * with)
-            adapter.learn(raw: l.raw, target: l.target, pose: l.pose, time: l.time, weight: l.weight)
+            return (bySource, byPitch, adapter)
         }
+        let base = replay(GazeAdapterConfig())
         print("")
         print("Aim adapter, each label scored before it is learned: mean distance to the target (cm), without -> with.")
-        for (name, s) in bySource.sorted(by: { $0.key < $1.key }) + byPitch.sorted(by: { $0.key < $1.key }) {
+        for (name, s) in base.bySource.sorted(by: { $0.key < $1.key }) + base.byPitch.sorted(by: { $0.key < $1.key }) {
             print(name.padding(toLength: 18, withPad: " ", startingAt: 0)
                   + String(format: " %6.1f labels  %5.2f -> %5.2f cm", s.0, s.1 / s.0 / 60, s.2 / s.0 / 60))
         }
-        print("Learned \(adapter.learned), left out \(adapter.rejected) as too far from the aim.")
+        print("Learned \(base.adapter.learned), left out \(base.adapter.rejected) as too far from the aim.")
+        // How the starting tilt terms (GazeAdapterConfig.followPitch / followYaw) change the result on this session:
+        // the error with the adapter on every label but the check dots, which only warm it up.
+        print("Tilt follow sweep, error with the adapter on the game's labels (cm); rows pitch, columns yaw:")
+        let yaws = [0.0, 0.5, 1.0]
+        print("         " + yaws.map { String(format: "yaw %.1f", $0) }.joined(separator: "  "))
+        for pitchFollow in [0.0, 0.5, 1.0, 1.5] {
+            let cells = yaws.map { yawFollow -> String in
+                var c = GazeAdapterConfig()
+                c.followPitch = pitchFollow
+                c.followYaw = yawFollow
+                let game = replay(c).bySource.filter { $0.key != "check" }.values
+                let w = game.map(\.0).reduce(0, +), e = game.map(\.2).reduce(0, +)
+                return w > 0 ? String(format: "  %5.2f", e / w / 60) : "      -"
+            }
+            print(String(format: "pitch %.1f", pitchFollow) + cells.joined(separator: "   "))
+        }
     }
 }

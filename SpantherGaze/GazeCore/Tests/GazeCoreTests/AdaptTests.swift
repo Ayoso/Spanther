@@ -4,9 +4,32 @@ import XCTest
 final class AdaptTests: XCTestCase {
     private let level = HeadPose(pitch: 0.03, yaw: -0.2)
 
-    func testNoLabelsNoCorrection() {
-        let a = GazeAdapter(reference: level)
-        XCTAssertEqual(a.correction(pose: HeadPose(pitch: 0.3, yaw: 0.1)), .zero)
+    func testWithoutLabelsOnlyTheTiltPriorActs() {
+        let a = GazeAdapter(reference: level, distanceM: 0.3)
+        XCTAssertEqual(a.correction(pose: level), .zero)
+        // 2 degrees more pitch and 1 degree more yaw: the aim follows the head by followPitch (1.0) and followYaw
+        // (0.5) of the head's turn projected at 30 cm (6000 pt per metre), so the correction pushes back that far.
+        let deg = Double.pi / 180
+        let c = a.correction(pose: HeadPose(pitch: level.pitch + 2 * deg, yaw: level.yaw + 1 * deg))
+        XCTAssertEqual(c.y, -1.0 * 0.3 * 6000 * 2 * deg, accuracy: 1e-6)
+        XCTAssertEqual(c.x, -0.5 * 0.3 * 6000 * 1 * deg, accuracy: 1e-6)
+    }
+
+    func testANewTiltIsCorrectedBeforeAnyLabelAtThatTilt() {
+        // As in Aziz's rhythm session on 2026-11-07: labels come only while the player holds still at one tilt, and
+        // the raw aim follows the head by 1.4 of its turn (40 pt per degree of pitch at 28 cm).
+        var a = GazeAdapter(reference: level, distanceM: 0.28)
+        let follow = 1.4 * 0.28 * 6000
+        for i in 0..<20 {
+            let target = Vec2(100 + Double(i % 6) * 120, 100 + Double(i % 3) * 100)
+            a.learn(raw: target, target: target, pose: level, time: Double(i) * 2)
+        }
+        // Then the phone is tilted 4 degrees: the aim would be 160 pt off.
+        let tilt = 4 * Double.pi / 180
+        let tilted = HeadPose(pitch: level.pitch + tilt, yaw: level.yaw)
+        let offset = follow * tilt
+        let left = offset + a.correction(pose: tilted).y
+        XCTAssertLessThan(abs(left), offset * 0.35, "\(offset) pt without, \(left) pt left with the adapter")
     }
 
     func testSolve3() {
