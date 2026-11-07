@@ -225,16 +225,17 @@ jobs:
           then pass "wink: $(tail -n 1 "$OUT/wink.check.txt")"; else fail "wink: $(tail -n 1 "$OUT/wink.check.txt")"; fi
           xcrun simctl terminate "$UDID" "$BID" || true
 
-          # Rhythm mode: the bot picks the fastest track on hard after 4 s, winks at the start star 4 s later, then
-          # looks at each note and winks the asked eye about 0.1 s after its beat. The track takes about 61 s.
+          # Rhythm mode: the bot picks the fastest track on hard 8 s after the list appears, winks at the start star
+          # 6 s later, then looks at each note and winks the asked eye about 0.1 s after its beat. The track takes
+          # about 61 s. `simctl launch` can return seconds after the app is up, so each shot sits mid-screen in time.
           xcrun simctl launch --stdout="$OUT/rhythm.stdout.log" --stderr="$OUT/rhythm.stderr.log" "$UDID" "$BID" -SpantherAutoplay rhythm
-          sleep 3; shot rhythm-0-tracks
-          sleep 3; shot rhythm-1-start
-          sleep 9; shot rhythm-2-play-a
+          sleep 2; shot rhythm-0-tracks
+          sleep 8; shot rhythm-1-start
+          sleep 11; shot rhythm-2-play-a
           sleep 0.3; shot rhythm-2-play-b
           sleep 15; shot rhythm-3-play
           sleep 20; shot rhythm-4-play
-          sleep 26; shot rhythm-5-results
+          sleep 24; shot rhythm-5-results
           if running; then pass "rhythm: app running after the track"; else fail "rhythm: app not running after the track"; fi
           DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null) || true
           CSV=$(ls -t "$DATA"/tmp/spanther-*.csv 2>/dev/null | head -n 1) || true
@@ -259,6 +260,12 @@ jobs:
           sys.exit(0 if ok else 1)
           PY
           then pass "rhythm: $(tail -n 1 "$OUT/rhythm.check.txt")"; else fail "rhythm: $(tail -n 1 "$OUT/rhythm.check.txt")"; fi
+          # The play screen must move: in the first build the canvas kept its first frame while the game ran on.
+          if cmp -s "$OUT/rhythm-3-play.jpg" "$OUT/rhythm-4-play.jpg" || cmp -s "$OUT/rhythm-2-play-a.jpg" "$OUT/rhythm-2-play-b.jpg"; then
+            fail "rhythm: the play screen did not change between screenshots"
+          else
+            pass "rhythm: the play screen changes between screenshots"
+          fi
           xcrun simctl terminate "$UDID" "$BID" || true
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
