@@ -250,10 +250,10 @@ private struct RhythmPicker: View {
     }
 
     /// Simulator smoke test: the bot plays the fastest track on hard, once the list has been on screen for a
-    /// screenshot.
+    /// screenshot (the CI job takes it 2 s after `simctl launch` returns, which can be seconds after launch).
     private func autoplay() {
         guard app.autoplay == "rhythm" else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
             guard app.rhythm == nil, let t = app.rhythmTracks.max(by: { $0.bpm < $1.bpm }) else { return }
             trackID = t.id
             levelRaw = RhythmLevel.hard.rawValue
@@ -324,7 +324,10 @@ private struct RhythmPlayView: View {
         } else {
             ZStack(alignment: .topTrailing) {
                 TimelineView(.animation) { _ in
-                    Canvas { g, size in draw(&g, size, CACurrentMediaTime()) }
+                    // The time is read here, once per frame, and captured by the canvas. Read inside the canvas
+                    // closure, it gave SwiftUI nothing that changed, so the canvas kept its first frame of play.
+                    let now = CACurrentMediaTime()
+                    Canvas { g, size in draw(&g, size, now) }
                 }
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
@@ -394,10 +397,12 @@ private struct RhythmPlayView: View {
             guard let a = s.judgedAt[i - 1], let b = s.judgedAt[i], a <= t, b <= t,
                   s.judge.results[i - 1].map({ $0 != .miss }) == true, s.judge.results[i].map({ $0 != .miss }) == true,
                   s.notes[i].time - s.notes[i - 1].time < 3 else { continue }
+            let alpha = 0.22 * Self.settle(age: t - b, to: 0)
+            guard alpha > 0 else { continue }
             var line = Path()
             line.move(to: cg(s.points[i - 1]))
             line.addLine(to: cg(s.points[i]))
-            g.stroke(line, with: .color(Atlas.ink.opacity(t - b < 6 ? 0.22 : 0.12)), lineWidth: 1)
+            g.stroke(line, with: .color(Atlas.ink.opacity(alpha)), lineWidth: 1)
         }
 
         // Where to look after the next note.
@@ -446,17 +451,25 @@ private struct RhythmPlayView: View {
         drawReticle(&g, aim, onTarget: onTarget)
     }
 
+    /// How much of a played note's mark is left `age` seconds after it was judged: all of it for 4 s, then it fades
+    /// to `rest` by 10 s. The whole constellation is on the results plate.
+    private static func settle(age: Double, to rest: Double) -> Double {
+        age < 4 ? 1 : max(rest, 1 - (1 - rest) * (age - 4) / 6)
+    }
+
     private func drawJudged(_ g: inout GraphicsContext, _ p: CGPoint, _ j: Judgement, age: Double, r: CGFloat, dialR: CGFloat) {
+        var mark = g
+        mark.opacity = Self.settle(age: age, to: 0.3)
         if j == .miss {
             if age < 0.4 {
                 var gg = g
                 gg.opacity = 1 - age / 0.4
                 gg.fill(Atlas.star(p, r * (1 - age)), with: .color(Atlas.missGrey))
             }
-            g.stroke(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
-                     with: .color(Atlas.missGrey.opacity(0.5)), lineWidth: 1)
+            mark.stroke(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
+                        with: .color(Atlas.missGrey.opacity(0.5)), lineWidth: 1)
         } else {
-            g.fill(Atlas.star(p, 5), with: .color(j == .perfect ? Atlas.vermilion : Atlas.ink.opacity(0.6)))
+            mark.fill(Atlas.star(p, 5), with: .color(j == .perfect ? Atlas.vermilion : Atlas.ink.opacity(0.6)))
             if age < 0.35 {
                 let k = age / 0.35
                 var gg = g
