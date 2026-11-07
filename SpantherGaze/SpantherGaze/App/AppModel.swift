@@ -86,8 +86,13 @@ final class AppModel: ObservableObject {
         if !FaceTracker.isSupported { mode = .touch }
         if let bot = autoplay {
             // CI smoke test in the Simulator: skip the menu and let the bot play.
-            mode = bot == "eyes" ? .eyes : .touch
-            route = .game
+            if bot == "wink" {
+                route = .winkTest
+                startWinkBot()
+            } else {
+                mode = bot == "eyes" ? .eyes : .touch
+                route = .game
+            }
         }
         tracker.onSample = { [weak self] s in self?.handle(s) }
         tracker.onInfo = { [weak self] info in
@@ -230,10 +235,28 @@ final class AppModel: ObservableObject {
     }
 
     /// A run starts: its first click sounds at `time`. Closures from before it are dropped.
-    func startWinkRun(time: Double, periodSec: Double, audioLatency: Double) {
+    func startWinkRun(plan: WinkTestPlan, time: Double, audioLatency: Double) {
         winks = []
         status.lastWink = nil
-        logger.winkTest(time: time, periodSec: periodSec, audioLatency: audioLatency)
+        logger.winkTest(time: time, periodSec: plan.periodSec, audioLatency: audioLatency)
+        if autoplay == "wink" { winkBot = WinkBot(plan: plan, start: time) }
+    }
+
+    /// Simulator smoke test (`-SpantherAutoplay wink`): a scripted player's eyelids go through `handle` 60 times a
+    /// second, as if ARKit had sent them, with a face that looks straight at the screen.
+    private var winkBot: WinkBot?
+    private var botTimer: Timer?
+
+    private func startWinkBot() {
+        let face = GazeFeatures(lookAtHit: .zero, eyeAxisHit: .zero, yaw: 0, pitch: 0, roll: 0, distance: 0.35, pupils: nil)
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let t = CACurrentMediaTime()
+            let lids = self.winkBot?.lids(at: t) ?? (left: 0.1, right: 0.1)
+            self.handle(TrackingSample(timestamp: t, features: face, blink: lids, processingMs: 0.5, fps: 60))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        botTimer = timer
     }
 
     func logWinkCue(side: WinkSide, time: Double) { logger.cue(side: side, time: time) }

@@ -257,3 +257,58 @@ public struct WinkStats: Equatable, Sendable {
         return stats
     }
 }
+
+/// A scripted player for the wink test, for the Simulator smoke test (which has no face tracking) and for tests.
+/// It winks the asked eye on most cues, 80 ms late with up to ±60 ms of jitter, and the other eye squints to 0.3.
+/// Out of every 20 cues it uses the wrong eye once, blinks instead once and misses one. A natural blink falls
+/// half a beat after every 6th cue. With the default plan that is 27 of 30 hits on the left eye, 24 of 30 on the
+/// right, 3 cues answered by the wrong eye, 3 by a blink, and 10 stray blinks.
+public struct WinkBot: Sendable {
+    public enum Answer: Equatable, Sendable { case asked, otherEye, blink, none }
+
+    public struct Closure: Equatable, Sendable {
+        public var side: WinkSide
+        public var onset: Double
+        public var duration: Double
+    }
+
+    /// One per cue, in cue order.
+    public let answers: [Answer]
+    public let closures: [Closure]
+    public var openLevel = 0.1, closedLevel = 0.9, squint = 0.3
+
+    /// `start`: the run's first click, on the clock the lids are read with.
+    public init(plan: WinkTestPlan, start: Double) {
+        var answers: [Answer] = [], closures: [Closure] = []
+        for (i, cue) in plan.cues.enumerated() {
+            let beat = start + cue.offset
+            let answer: Answer = i % 20 == 7 ? .otherEye : i % 20 == 13 ? .blink : i % 20 == 17 ? .none : .asked
+            answers.append(answer)
+            // (i * 37) % 13 runs through 0...12, so the jitter averages out to zero.
+            let onset = beat + 0.08 + Double((i * 37) % 13 - 6) * 0.01
+            let other: WinkSide = cue.side == .left ? .right : .left
+            switch answer {
+            case .asked: closures.append(Closure(side: cue.side, onset: onset, duration: 0.22))
+            case .otherEye: closures.append(Closure(side: other, onset: onset, duration: 0.22))
+            case .blink: closures.append(Closure(side: .both, onset: onset, duration: 0.12))
+            case .none: break
+            }
+            if i % 6 == 5 { closures.append(Closure(side: .both, onset: beat + plan.periodSec / 2, duration: 0.12)) }
+        }
+        self.answers = answers
+        self.closures = closures
+    }
+
+    /// Eyelid closure at `t`, 0 open ... 1 closed, like ARKit eyeBlinkLeft / eyeBlinkRight.
+    public func lids(at t: Double) -> (left: Double, right: Double) {
+        var l = openLevel, r = openLevel
+        for c in closures where t >= c.onset && t < c.onset + c.duration {
+            switch c.side {
+            case .left: l = closedLevel; r = Swift.max(r, squint)
+            case .right: r = closedLevel; l = Swift.max(l, squint)
+            case .both: l = closedLevel; r = closedLevel
+            }
+        }
+        return (l, r)
+    }
+}

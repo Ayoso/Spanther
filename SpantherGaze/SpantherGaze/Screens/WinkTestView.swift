@@ -30,7 +30,14 @@ struct WinkTestView: View {
             }
         }
         .onReceive(ticker) { _ in tick() }
+        .onAppear { autoBegin() }
         .onDisappear { clicks?.stop() }
+    }
+
+    /// Simulator smoke test: the bot starts the run itself, once the intro has been on screen for a screenshot.
+    private func autoBegin() {
+        guard app.autoplay == "wink" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { if phase == .intro { begin() } }
     }
 
     // MARK: intro
@@ -194,7 +201,7 @@ struct WinkTestView: View {
         scheduled = 0
         cuesLogged = 0
         stats = nil
-        app.startWinkRun(time: start, periodSec: plan.periodSec, audioLatency: player.outputLatency)
+        app.startWinkRun(plan: plan, time: start, audioLatency: player.outputLatency)
         phase = .running
     }
 

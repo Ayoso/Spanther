@@ -144,4 +144,30 @@ final class WinkTests: XCTestCase {
         XCTAssertEqual(s.strayOneEye, 1)
         XCTAssertEqual(s.strayBoth, 1)
     }
+
+    func testScriptedPlayerThroughTheDetector() {
+        let plan = WinkTestPlan()
+        let start = 50.0
+        let bot = WinkBot(plan: plan, start: start)
+        var d = WinkDetector()
+        let events = run(&d, start - 1, start + plan.durationSec + 1,
+                         left: { bot.lids(at: $0).left }, right: { bot.lids(at: $0).right })
+        let s = WinkStats.compute(cues: plan.cues, beats: plan.cues.map { start + $0.offset }, events: events)
+        XCTAssertEqual(s.left.cues, 30)
+        XCTAssertEqual(s.left.hits, 27)
+        XCTAssertEqual(s.left.wrongEye, 1)
+        XCTAssertEqual(s.left.bothEyes, 1)
+        XCTAssertEqual(s.right.hits, 24)
+        XCTAssertEqual(s.right.wrongEye, 2)
+        XCTAssertEqual(s.right.bothEyes, 2)
+        XCTAssertEqual(s.strayBoth, 10)
+        XCTAssertEqual(s.strayOneEye, 0)
+        // 80 ms late on average, plus up to one frame until the detector sees the lid down.
+        XCTAssertEqual(s.left.meanOffsetMs, 80 + 1000 / fps / 2, accuracy: 1000 / fps / 2 + 5)
+        XCTAssertEqual(s.right.meanOffsetMs, 80 + 1000 / fps / 2, accuracy: 1000 / fps / 2 + 5)
+        XCTAssertLessThan(s.left.sdOffsetMs, 45)
+        XCTAssertEqual(s.left.within100, 27)
+        XCTAssertEqual(s.left.medianOtherPeak, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(s.left.meanDecisionMs, 50, accuracy: 1000 / fps)
+    }
 }
