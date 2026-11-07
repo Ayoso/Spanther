@@ -175,7 +175,8 @@ private struct RhythmPicker: View {
                 .disabled(track == nil)
                 .onAppear(perform: autoplay)
             }
-            .frame(width: 300)
+            // 300 pt, narrower on a 4.7-inch phone so the track names keep their room.
+            .frame(width: min(300, screen.width * 0.4))
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
@@ -188,7 +189,10 @@ private struct RhythmPicker: View {
         return Button { trackID = t.id } label: {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
+                    // A long name («Метеоритный дождь») shrinks a little instead of losing its end.
                     Text(t.title).font(Atlas.title).foregroundStyle(selected ? Atlas.ink : Atlas.inkSoft)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Text(String(format: "%.0f уд/мин · %ld:%02ld · %@", t.bpm, length / 60, length % 60, t.license))
                         .font(Atlas.caption)
                         .foregroundStyle(Atlas.inkSoft)
