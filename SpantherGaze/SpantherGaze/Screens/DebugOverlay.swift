@@ -44,6 +44,8 @@ struct DebugOverlay: View {
             l.append(String(format: "blinks %ld  reload %ld/%ld", status.blinksTotal, status.pendingBlinks, status.reloadBlinksNeeded))
         }
         if let g = status.gaze { l.append(String(format: "gaze %.0f, %.0f pt", g.x, g.y)) }
+        l.append(String(format: "aim adapter %+.0f, %+.0f pt  labels %ld  left out %ld", status.aimCorrection.x,
+                        status.aimCorrection.y, status.aimLabels, status.aimRejected))
         return l
     }
 }

@@ -150,10 +150,12 @@ struct WinkTestView: View {
                         .frame(width: size * (1 + 1.2 * p), height: size * (1 + 1.2 * p))
                 }
             }
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Image(systemName: active ? "eye.slash.fill" : "eye")
                     .font(.system(size: 30, weight: .semibold))
                 Text(side == .left ? "левый" : "правый").font(.footnote)
+                // Inside the circle, where the closing ring of the next click never covers it.
+                timing(side, now: now)
             }
             .foregroundStyle(active ? Palette.gaze : Palette.dim.opacity(0.5))
             feedback(side, now: now)
@@ -161,26 +163,33 @@ struct WinkTestView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// A flash for half a second after a wink on this side: cyan on the asked eye, red on the wrong one, amber when
-    /// both eyes closed. The number is how late (+) or early (-) it landed against the nearest click.
+    /// The last wink on this side, if it is under half a second old: its age (0...1), its colour (cyan on the asked
+    /// eye, red on the wrong one, amber when both eyes closed) and how late (+) or early (-) it landed, in ms.
+    private func recentWink(_ side: WinkSide, now: Double) -> (age: Double, color: Color, offsetMs: Double)? {
+        guard let w = status.lastWink, now - w.onset < 0.5, w.side == side || w.side == .both,
+              let near = nearestCue(to: w.onset) else { return nil }
+        let onTime = abs(w.onset - near.time) <= 0.45
+        let color = w.side == .both ? Palette.fire : (near.cue.side == side && onTime ? Palette.gaze : Palette.hot)
+        return (max(0, now - w.onset) / 0.5, color, (w.onset - near.time) * 1000)
+    }
+
+    /// A flash for half a second after a wink on this side.
     @ViewBuilder
     private func feedback(_ side: WinkSide, now: Double) -> some View {
-        if let w = status.lastWink, now - w.onset < 0.5, w.side == side || w.side == .both,
-           let near = nearestCue(to: w.onset) {
-            let age = max(0, now - w.onset) / 0.5
-            let onTime = abs(w.onset - near.time) <= 0.45
-            let color = w.side == .both ? Palette.fire : (near.cue.side == side && onTime ? Palette.gaze : Palette.hot)
-            ZStack {
-                Circle().stroke(color, lineWidth: 6)
-                    .frame(width: 104 * (1 + 0.4 * age), height: 104 * (1 + 0.4 * age))
-                    .opacity(1 - age)
-                Text(String(format: "%+.0f мс", (w.onset - near.time) * 1000))
-                    .font(.subheadline.bold().monospacedDigit())
-                    .foregroundStyle(color)
-                    .offset(y: 90)
-                    .opacity(1 - age)
-            }
+        if let w = recentWink(side, now: now) {
+            Circle().stroke(w.color, lineWidth: 6)
+                .frame(width: 104 * (1 + 0.4 * w.age), height: 104 * (1 + 0.4 * w.age))
+                .opacity(1 - w.age)
         }
+    }
+
+    /// How late the last wink on this side landed. Always takes its line, so the eye above it does not jump.
+    private func timing(_ side: WinkSide, now: Double) -> some View {
+        let w = recentWink(side, now: now)
+        return Text(w.map { String(format: "%+.0f мс", $0.offsetMs) } ?? "0 мс")
+            .font(.footnote.bold().monospacedDigit())
+            .foregroundStyle(w?.color ?? .clear)
+            .opacity(w.map { 1 - $0.age } ?? 0)
     }
 
     private func caption(next: WinkTestPlan.Cue?, now: Double) -> String {
@@ -223,7 +232,10 @@ struct WinkTestView: View {
             cuesLogged += 1
         }
         if now > start + plan.durationSec + 0.5 {
-            stats = WinkStats.compute(cues: plan.cues, beats: plan.cues.map { start + $0.offset }, events: app.winks)
+            let result = WinkStats.compute(cues: plan.cues, beats: plan.cues.map { start + $0.offset }, events: app.winks)
+            stats = result
+            // The rhythm mode starts from this delay and keeps learning it in play.
+            app.rememberWinkDelay(result)
             phase = .done
         }
     }
@@ -243,10 +255,12 @@ struct WinkTestView: View {
                 eye("Левый глаз", s.left)
                 eye("Правый глаз", s.right)
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Лишние подмигивания: \(s.strayOneEye) · моргания: \(s.strayBoth)")
-                        .font(.footnote)
-                        .foregroundStyle(Palette.dim)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Лишние подмигивания: \(s.strayOneEye)")
+                        Text("Лишние моргания: \(s.strayBoth)")
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(Palette.dim)
                     ShareLink(item: app.logURL) {
                         Label("Отправить CSV", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                     }

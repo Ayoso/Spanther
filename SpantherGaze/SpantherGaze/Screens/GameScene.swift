@@ -33,6 +33,9 @@ final class GameScene: SKScene {
     /// CSV event rows: kind ("energy" per kill, "reload", "level" for a new level, "restart" when shields ran
     /// out), the energy left after it, and the level it happened on.
     var onGameEvent: ((_ kind: String, _ energy: Int, _ level: Int) -> Void)?
+    /// Eye mode: the centre of the meteor taken as looked at on this frame (screen pt), or nil. The aim adapter
+    /// learns from it.
+    var onLookedAt: ((Vec2?) -> Void)?
     let hud = GameHUD()
     var paused_ = false
 
@@ -210,6 +213,7 @@ final class GameScene: SKScene {
         }
 
         for a in m.asteroids { rocks[a.id]?.sync(a, at: sk(a.position)) }
+        if !useTouch, botGaze == nil { onLookedAt?(m.asteroids.first { $0.isTargeted }?.position) }
         if hud.needsReload != m.needsReload { hud.needsReload = m.needsReload }
 
         if case .point(let p) = gaze {
