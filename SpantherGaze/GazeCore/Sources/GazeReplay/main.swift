@@ -228,3 +228,53 @@ let loggedReloads = rows.filter { $0.kind == "reload" }.count
 print("")
 print("Blinks: replay \(blinks), app logged \(loggedBlinks). Reloads: replay \(reloads), app logged \(loggedReloads) "
       + "(the app also counts taps in touch mode). Gaze held on \(pct(held, frameRows.count))% of game frames.")
+
+// Aim adapter (GazeAdapter), replayed online over the moments the game knew where the player looked: `label` rows
+// (check dots, start stars and rhythm notes; their gaze is the model's raw prediction) and eye-game `frame` rows with
+// a target (the meteor being burned; the raw prediction is refitted here, at the app's weight of 1/20 a frame).
+// Each label is scored with what was learned before it, so the columns compare the aim without and with the
+// correction on the same moments, split by how far the head's pitch was from the calibration's.
+let poseRows = used.flatMap(\.rows).compactMap(features)
+if let reference = HeadPose.mean(poseRows) {
+    let set: GazeFeatures.FeatureSet = poseRows.contains { $0.pupils != nil } ? .eyesAndPupils : .eyes
+    var X: [[Double]] = [], Y: [Vec2] = []
+    for a in used { for r in a.rows { if let f = features(r) { X.append(f.vector(set)); Y.append(a.target) } } }
+    let model = RidgeModel.fit(features: X, targets: Y, lambda: 0.01, featureSet: set.rawValue)
+    struct Label { let time: Double; let source: String; let raw: Vec2; let target: Vec2; let pose: HeadPose; let weight: Double }
+    var labels: [Label] = []
+    for r in rows {
+        guard let t = target(r) else { continue }
+        if r.kind == "label", let x = r.d("gaze_x_pt"), let y = r.d("gaze_y_pt") {
+            labels.append(Label(time: r.time, source: r.cells["label_src"] ?? "?", raw: Vec2(x, y), target: t,
+                                pose: HeadPose(pitch: r.d("pitch_rad") ?? 0, yaw: r.d("yaw_rad") ?? 0), weight: 1))
+        } else if r.kind == "frame", r.cells["hold"] != "1", let m = model, let f = features(r) {
+            let v = f.vector(set)
+            guard !m.outOfRange(v, features: 0..<2, margin: RidgeModel.lookingAwayMargin) else { continue }
+            labels.append(Label(time: r.time, source: "meteor", raw: m.predict(v), target: t, pose: HeadPose(f), weight: 1.0 / 20))
+        }
+    }
+    if !labels.isEmpty {
+        var adapter = GazeAdapter(reference: reference)
+        // [source or pitch bin: (weight, error without, error with)]
+        var bySource: [String: (Double, Double, Double)] = [:], byPitch: [String: (Double, Double, Double)] = [:]
+        for l in labels.sorted(by: { $0.time < $1.time }) {
+            let without = l.raw.distance(to: l.target), with = adapter.correct(l.raw, pose: l.pose).distance(to: l.target)
+            let deg = abs(l.pose.pitch - reference.pitch) * 180 / Double.pi
+            let bin = deg < 3 ? "pitch within 3°" : deg < 6 ? "pitch 3-6° off" : "pitch over 6° off"
+            for key in [l.source] {
+                let s = bySource[key] ?? (0, 0, 0)
+                bySource[key] = (s.0 + l.weight, s.1 + l.weight * without, s.2 + l.weight * with)
+            }
+            let p = byPitch[bin] ?? (0, 0, 0)
+            byPitch[bin] = (p.0 + l.weight, p.1 + l.weight * without, p.2 + l.weight * with)
+            adapter.learn(raw: l.raw, target: l.target, pose: l.pose, time: l.time, weight: l.weight)
+        }
+        print("")
+        print("Aim adapter, each label scored before it is learned: mean distance to the target (cm), without -> with.")
+        for (name, s) in bySource.sorted(by: { $0.key < $1.key }) + byPitch.sorted(by: { $0.key < $1.key }) {
+            print(name.padding(toLength: 18, withPad: " ", startingAt: 0)
+                  + String(format: " %6.1f labels  %5.2f -> %5.2f cm", s.0, s.1 / s.0 / 60, s.2 / s.0 / 60))
+        }
+        print("Learned \(adapter.learned), left out \(adapter.rejected) as too far from the aim.")
+    }
+}

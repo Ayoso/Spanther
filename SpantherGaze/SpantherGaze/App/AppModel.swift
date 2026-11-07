@@ -8,8 +8,10 @@ enum Route: Equatable {
     case check
     case result
     case game
-    /// Measures one-eye winks before the rhythm mode is built.
+    /// Measures one-eye winks, the input of the rhythm mode.
     case winkTest
+    /// Rhythm mode: notes land on the beat of a track; look at each one and wink as it lands.
+    case rhythm
 }
 
 enum ControlMode { case eyes, touch }
@@ -34,15 +36,24 @@ final class TrackingStatus: ObservableObject {
     /// Wink test: the last closure the wink detector reported, and the level at which each eye counts as closed.
     @Published var lastWink: WinkEvent?
     @Published var winkCloseLevel: (left: Double, right: Double) = (0.6, 0.6)
+    /// Aim adapter: the correction it adds now (screen pt), the labels it learned and the ones it left out.
+    @Published var aimCorrection = Vec2.zero
+    @Published var aimLabels = 0
+    @Published var aimRejected = 0
 }
 
 /// App state shared by all screens. Main thread only.
 final class AppModel: ObservableObject {
-    @Published var route: Route = .menu
+    @Published var route: Route = .menu { didSet { lookedAtMeteor = nil } }
     @Published var mode: ControlMode = .eyes
     @Published var report: AccuracyReport?
     @Published var showDebug = false
     @Published var usePupils = true
+    /// Adds the aim adapter's correction to the gaze. Off: the adapter still learns and the CSV still shows its
+    /// correction, but the aim is the calibrated model's alone, for comparing the two on the phone.
+    @Published var adaptAim = true
+    /// Where «Играть» on the calibration result leads.
+    private(set) var afterCalibration: Route = .game
 
     let status = TrackingStatus()
     let tracker = FaceTracker()
@@ -61,6 +72,25 @@ final class AppModel: ObservableObject {
     /// Time of the last 3-blink reload not yet taken by the game.
     private var pendingReloadTime: Double?
     private var lastSampleTime = 0.0
+
+    /// Keeps the calibrated aim on target when the phone is held at another tilt (GazeAdapter). Made at each
+    /// calibration, warmed on the check dots, then taught by the meteors being burned and the rhythm notes winked.
+    private(set) var adapter: GazeAdapter?
+    /// The model's raw predictions (screen pt, before the correction) of the last 0.6 s with open eyes, with the
+    /// head pose: where the player looked just before an eye closure or a tap.
+    private var recentRaw: [(time: Double, raw: Vec2, pose: HeadPose)] = []
+    /// What the adapter adds to the prediction right now (screen pt).
+    private(set) var aimCorrection = Vec2.zero
+    /// The meteor the game takes as looked at (screen pt), set by the scene on each frame of an eye game.
+    var lookedAtMeteor: Vec2?
+    /// A meteor being looked at teaches the adapter a little on every frame: 20 frames weigh as much as one note.
+    static let meteorLabelWeight = 1.0 / 20
+    private var checkPoses: [HeadPose] = []
+
+    /// Rhythm mode: the tracks in the bundle (tracks.json) and the play in progress.
+    let rhythmTracks: [RhythmTrack]
+    @Published private(set) var rhythm: RhythmSession?
+    private var rhythmTimer: Timer?
 
     /// Points per centimetre. Current iPhones are about 60 pt/cm (163 pt per inch on 2x, ~153 on 3x Pro).
     let ptPerCm = 60.0
@@ -81,6 +111,9 @@ final class AppModel: ObservableObject {
             fatalError("balance.json is missing or invalid")
         }
         balance = cfg
+        rhythmTracks = Bundle.main.url(forResource: "tracks", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? RhythmTrack.load(from: $0) } ?? []
         blinkDetector = BlinkDetector(cfg.energy ?? EnergyConfig())
         status.reloadBlinksNeeded = (cfg.energy ?? EnergyConfig()).reloadBlinks
         if !FaceTracker.isSupported { mode = .touch }
@@ -89,6 +122,9 @@ final class AppModel: ObservableObject {
             if bot == "wink" {
                 route = .winkTest
                 startWinkBot()
+            } else if bot == "rhythm" {
+                mode = .eyes
+                route = .rhythm
             } else {
                 mode = bot == "eyes" ? .eyes : .touch
                 route = .game
@@ -109,6 +145,9 @@ final class AppModel: ObservableObject {
     }
 
     var eyeTrackingSupported: Bool { FaceTracker.isSupported }
+
+    /// The rhythm mode plays by eye where face tracking works, and for the Simulator bot, which aims by itself.
+    var rhythmByEye: Bool { eyeTrackingSupported || autoplay == "rhythm" }
 
     /// The only way the app's screen is held (Info.plist: UIInterfaceOrientationLandscapeRight, front camera on the
     /// left). Gaze calibration does not survive turning the phone half a turn, because the camera moves to the other
@@ -131,12 +170,18 @@ final class AppModel: ObservableObject {
             blinkDetector.faceLost()
         }
 
-        if route == .winkTest {
+        if route == .winkTest || route == .rhythm {
             if s.features != nil, let b = s.blink {
                 if let e = winkDetector.update(time: s.timestamp, left: b.left, right: b.right) {
-                    winks.append(e)
                     logger.wink(e)
-                    status.lastWink = e
+                    if route == .winkTest {
+                        winks.append(e)
+                        status.lastWink = e
+                    } else {
+                        // The gaze is still held from before the lid moved (the blink detector froze it), so this
+                        // is where the player aimed.
+                        rhythmClosure(e)
+                    }
                 }
             } else {
                 winkDetector.faceLost()
@@ -165,7 +210,16 @@ final class AppModel: ObservableObject {
                     filter.reset()
                     gaze = .notLooking
                 } else {
-                    gaze = .point(filter.filter(m.predict(v), t: s.timestamp))
+                    let raw = m.predict(v), pose = HeadPose(f)
+                    recentRaw.append((s.timestamp, raw, pose))
+                    if let i = recentRaw.firstIndex(where: { $0.time >= s.timestamp - 0.6 }), i > 0 {
+                        recentRaw.removeFirst(i)
+                    }
+                    if route == .game, mode == .eyes, let target = lookedAtMeteor {
+                        adapter?.learn(raw: raw, target: target, pose: pose, time: s.timestamp, weight: Self.meteorLabelWeight)
+                    }
+                    aimCorrection = adaptAim ? (adapter?.correction(pose: pose) ?? .zero) : .zero
+                    gaze = .point(filter.filter(raw + aimCorrection, t: s.timestamp))
                 }
             } else {
                 gaze = .notLooking
@@ -182,8 +236,14 @@ final class AppModel: ObservableObject {
             gaze = .lost
         }
         if route == .game, mode == .eyes, let f = s.features {
-            logger.sample(kind: "frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
-                          blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs)
+            logger.sample(kind: "frame", time: s.timestamp, target: lookedAtMeteor, gaze: gazePoint, f: f,
+                          blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
+                          correction: adapter == nil ? nil : aimCorrection)
+        }
+        if route == .rhythm, let f = s.features {
+            logger.sample(kind: "rhythm_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
+                          blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
+                          correction: adapter == nil ? nil : aimCorrection)
         }
         if route == .winkTest, let f = s.features {
             logger.sample(kind: "wink_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
@@ -202,6 +262,11 @@ final class AppModel: ObservableObject {
             status.gazeFrozen = blink.freezeGaze
             status.pendingBlinks = blinkDetector.pendingBlinks(at: s.timestamp)
             if route == .winkTest { status.winkCloseLevel = winkDetector.closeLevel() }
+            if showDebug {
+                status.aimCorrection = aimCorrection
+                status.aimLabels = adapter?.learned ?? 0
+                status.aimRejected = adapter?.rejected ?? 0
+            }
         }
     }
 
@@ -220,7 +285,13 @@ final class AppModel: ObservableObject {
         logger.event(kind: kind, time: CACurrentMediaTime(), energy: energy, level: level)
     }
 
-    var gazePoint: Vec2? { if case .point(let p) = gaze { return p }; return nil }
+    var gazePoint: Vec2? {
+        #if DEBUG
+        if let a = botAim { return a }
+        #endif
+        if case .point(let p) = gaze { return p }
+        return nil
+    }
 
     // MARK: wink test
 
@@ -261,13 +332,195 @@ final class AppModel: ObservableObject {
 
     func logWinkCue(side: WinkSide, time: Double) { logger.cue(side: side, time: time) }
 
+    // MARK: rhythm mode
+
+    /// Opens the rhythm mode's track list.
+    func openRhythm() {
+        rhythm?.stop()
+        rhythm = nil
+        route = .rhythm
+    }
+
+    /// Lays a track out for play on a screen this size (pt) and shows its start star.
+    func prepareRhythm(track: RhythmTrack, level: RhythmLevel, screen: Vec2) {
+        rhythm?.stop()
+        winkDetector = WinkDetector()
+        rhythm = RhythmSession(track: track, level: level, screen: screen,
+                               measuredErrorPt: mode == .eyes ? report?.meanErrorPt : 0,
+                               latencySec: RhythmRecords.latencySec)
+        startRhythmTimer()
+    }
+
+    /// Back to the track list, from play or from the results.
+    func leaveRhythmPlay() {
+        rhythm?.stop()
+        rhythm = nil
+        rhythmTimer?.invalidate()
+        rhythmTimer = nil
+        #if DEBUG
+        botAim = nil
+        #endif
+    }
+
+    /// The start star was winked at or touched at `host`: the aim is recentred on it and the music starts.
+    private func startRhythm(at host: Double) {
+        guard let s = rhythm, s.phase == .ready else { return }
+        if mode == .eyes { learnLabel(target: s.startPoint, before: host, source: "start") }
+        guard s.begin(host: CACurrentMediaTime()), let start = s.startHost else { return }
+        logger.rhythmStart(time: start, track: s.track.id, level: s.level.rawValue, beatSec: s.track.beatSec,
+                           audioLatency: s.outputLatency, latency: s.judge.latencySec, notes: s.notes.count)
+    }
+
+    /// An eye closure from the wink detector, while the rhythm mode is open.
+    private func rhythmClosure(_ e: WinkEvent) {
+        guard let s = rhythm else { return }
+        switch s.phase {
+        case .ready:
+            // A wink starts the track. An ordinary blink does not: everyone blinks while reading the screen.
+            if e.side != .both { startRhythm(at: e.onset) }
+        case .playing:
+            let aim = gazePoint
+            if let hit = s.closure(side: e.side, host: e.onset, aim: aim) {
+                record(hit, in: s, host: e.onset, side: e.side.rawValue, aim: aim)
+            }
+        case .done:
+            break
+        }
+    }
+
+    /// A finger on the rhythm screen: it starts the track on the start star, and plays the notes in touch mode.
+    func rhythmTouch(at p: Vec2) {
+        guard let s = rhythm else { return }
+        let now = CACurrentMediaTime()
+        switch s.phase {
+        case .ready:
+            if mode == .touch || p.distance(to: s.startPoint) < 100 { startRhythm(at: now) }
+        case .playing:
+            guard mode == .touch, let hit = s.tap(at: p, host: now) else { return }
+            record(hit, in: s, host: now, side: p.x < s.screen.x / 2 ? "left" : "right", aim: p)
+        case .done:
+            break
+        }
+    }
+
+    private func record(_ hit: RhythmJudge.Hit, in s: RhythmSession, host: Double, side: String, aim: Vec2?) {
+        let target = s.points[hit.index]
+        logger.rhythmNote(hit: true, time: host, index: hit.index, target: target, judgement: hit.judgement.rawValue,
+                          offset: hit.offsetSec, aimDistance: aim.map { $0.distance(to: target) }, side: side)
+        // The closure landed in this note's window, so the note is where the player meant to look.
+        if mode == .eyes { learnLabel(target: target, before: host, source: "rhythm") }
+    }
+
+    private func startRhythmTimer() {
+        rhythmTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.rhythmTick() }
+        RunLoop.main.add(t, forMode: .common)
+        rhythmTimer = t
+    }
+
+    private func rhythmTick() {
+        guard let s = rhythm, route == .rhythm else {
+            rhythmTimer?.invalidate()
+            rhythmTimer = nil
+            return
+        }
+        let now = CACurrentMediaTime()
+        #if DEBUG
+        rhythmBotStep(s, now)
+        #endif
+        guard s.phase == .playing else { return }
+        for i in s.tick(host: now) {
+            logger.rhythmNote(hit: false, time: now, index: i, target: s.points[i], judgement: Judgement.miss.rawValue,
+                              offset: nil, aimDistance: nil, side: nil)
+        }
+        if s.phase == .done {
+            rhythmTimer?.invalidate()
+            rhythmTimer = nil
+            if s.judge.count(.perfect) + s.judge.count(.good) + s.judge.count(.ok) >= 5 {
+                RhythmRecords.latencySec = s.judge.latencySec
+            }
+            s.isNewBest = RhythmRecords.save(s.track, s.level, score: s.judge.score, stars: s.judge.stars)
+            logger.rhythmEnd(time: now, score: s.judge.score, accuracy: s.judge.accuracy, latency: s.judge.latencySec)
+        }
+    }
+
+    /// Teaches the aim adapter that the player looked at `target` (screen pt) just before `host`, an eye closure
+    /// or a tap: the raw predictions of the 0.3 s before it with open eyes (median per axis) and the pose then.
+    @discardableResult
+    private func learnLabel(target: Vec2, before host: Double, source: String) -> Bool {
+        let frames = recentRaw.filter { $0.time <= host && $0.time >= host - 0.3 }
+        guard adapter != nil, frames.count >= 3 else { return false }
+        let raw = Vec2(Self.median(frames.map { $0.raw.x }), Self.median(frames.map { $0.raw.y }))
+        let pose = HeadPose(pitch: Self.median(frames.map { $0.pose.pitch }), yaw: Self.median(frames.map { $0.pose.yaw }))
+        let ok = adapter?.learn(raw: raw, target: target, pose: pose, time: host) ?? false
+        logger.label(time: host, source: source, target: target, raw: raw, pitch: pose.pitch, yaw: pose.yaw,
+                     accepted: ok, correction: adapter?.correction(pose: pose) ?? .zero)
+        return ok
+    }
+
+    private static func median(_ v: [Double]) -> Double {
+        let s = v.sorted()
+        return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+    }
+
+    /// The wink test's mean delay from the click to the eye closing seeds the rhythm judge's delay.
+    func rememberWinkDelay(_ stats: WinkStats) {
+        let hits = stats.left.hits + stats.right.hits
+        guard hits >= 10 else { return }
+        let mean = (stats.left.meanOffsetMs * Double(stats.left.hits) + stats.right.meanOffsetMs * Double(stats.right.hits)) / Double(hits)
+        RhythmRecords.latencySec = mean / 1000
+    }
+
+    #if DEBUG
+    /// Simulator smoke test (`-SpantherAutoplay rhythm`): looks a little off each note's centre and winks the asked
+    /// eye about 0.1 s after the beat, misses every eleventh note and, on hard, winks the wrong eye now and then.
+    private(set) var botAim: Vec2?
+    private var botPlayed = Set<Int>()
+    private var botReadySince: Double?
+
+    private func rhythmBotStep(_ s: RhythmSession, _ now: Double) {
+        guard autoplay == "rhythm" else { return }
+        switch s.phase {
+        case .ready:
+            botAim = s.startPoint + Vec2(10, -6)
+            botPlayed = []
+            if botReadySince == nil { botReadySince = now }
+            if now - (botReadySince ?? now) > 4 {
+                botReadySince = nil
+                rhythmClosure(WinkEvent(side: .left, onset: now - 0.02, decided: now, otherPeak: 0.2))
+            }
+        case .playing:
+            let t = s.trackTime(host: now)
+            if let i = s.nextOpen(after: t) {
+                botAim = s.points[i] + Vec2(Double(i % 5) * 6 - 12, Double(i % 3) * 8 - 8)
+            }
+            for (i, n) in s.notes.enumerated() where !botPlayed.contains(i) {
+                let late = 0.1 + Double((i * 37) % 13 - 6) * 0.01
+                guard t >= n.time + late else { break }
+                botPlayed.insert(i)
+                if i % 11 == 7 { continue }
+                var side: WinkSide = n.side == .right ? .right : n.side == .left ? .left : (i % 2 == 0 ? .left : .right)
+                if s.level == .hard, i % 17 == 9 { side = side == .left ? .right : .left }
+                rhythmClosure(WinkEvent(side: side, onset: now, decided: now + 0.03, otherPeak: 0.2))
+            }
+        case .done:
+            botAim = nil
+        }
+    }
+    #endif
+
     // MARK: calibration
 
-    func beginCalibration() {
+    /// Starts a calibration; «Играть» on its result then leads to `next`.
+    func beginCalibration(then next: Route = .game) {
+        afterCalibration = next
         model = nil
+        adapter = nil
+        aimCorrection = .zero
         filter.reset()
         calibrationSet = []
         checkSet = []
+        checkPoses = []
         distances = []
         report = nil
         logger = SessionLogger()
@@ -304,6 +557,7 @@ final class AppModel: ObservableObject {
             calibrationSet.append((c.target, collectedFeatures))
         } else {
             checkSet.append((c.target, collectedGaze))
+            checkPoses.append(HeadPose.mean(collectedFeatures) ?? HeadPose(pitch: 0, yaw: 0))
         }
         return true
     }
@@ -314,12 +568,23 @@ final class AppModel: ObservableObject {
         for (t, fs) in calibrationSet { for f in fs { X.append(f.vector(featureSet)); Y.append(t) } }
         model = RidgeModel.fit(features: X, targets: Y, lambda: 0.01, featureSet: featureSet.rawValue)
         filter.reset()
+        // The adapter's tilt terms are measured from the grip the model was fitted at.
+        adapter = model == nil ? nil : HeadPose.mean(calibrationSet.flatMap { $0.features }).map { GazeAdapter(reference: $0) }
         route = model == nil ? .menu : .check
     }
 
     func finishCheck() {
         let distCm = distances.isEmpty ? 30 : distances.reduce(0, +) / Double(distances.count) * 100
         report = Metrics.report(samples: checkSet, ptPerCm: ptPerCm, viewingDistanceCm: distCm)
+        // The report above is the model's own accuracy. Then the check dots warm the adapter up: they say where the
+        // player looked at the calibration grip, which takes out a steady offset before the game starts.
+        let now = CACurrentMediaTime()
+        for (i, c) in checkSet.enumerated() where i < checkPoses.count && !c.predictions.isEmpty {
+            let mean = c.predictions.reduce(Vec2.zero, +) * (1 / Double(c.predictions.count))
+            let ok = adapter?.learn(raw: mean, target: c.target, pose: checkPoses[i], time: now) ?? false
+            logger.label(time: now, source: "check", target: c.target, raw: mean, pitch: checkPoses[i].pitch,
+                         yaw: checkPoses[i].yaw, accepted: ok, correction: adapter?.correction(pose: checkPoses[i]) ?? .zero)
+        }
         route = .result
     }
 

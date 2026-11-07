@@ -4,10 +4,10 @@ Native SPANTHER prototype: SwiftUI + SpriteKit + ARKit face tracking. Meteors fa
 
 ## Status
 
-- `GazeCore` (pure Swift) builds and its 38 unit tests pass with Swift 6.0 on Linux and in CI.
+- `GazeCore` (pure Swift) builds and its 81 unit tests pass with Swift 6.0 on Linux and in CI.
 - The app target compiles in GitHub Actions (Xcode 16.4 Release, and the newest Xcode on the runner in Debug), unsigned. Step-by-step Mac instructions (in Russian) are in the root README, the Windows route is in `SIDELOAD.md`.
 - First run on a real iPhone: Aziz, iPhone 13, 2026-11-04, installed with Sideloadly, played to level 6. Check error 1.29 cm; tracking ran at 30 fps, not 60. The aim went wild from level 5 on, which led to the gaze model changes below (replayed on that session, not yet confirmed on the phone). Every frame interval in that CSV was 33.3 ms from the first calibration dot, so the camera ran at 30 fps from the start, not after heating up. The CSV and the debug overlay now show the camera format, the formats the phone offers, the thermal state and Low Power Mode, so the next session shows why.
-- CI also runs the app in the iOS Simulator (job `simulator-smoke`): a Debug-only bot plays with the launch argument `-SpantherAutoplay eyes|touch`, the job checks that the app keeps running and that kills spend energy and reloads happen, and it pushes screenshots, session CSVs and logs to the `ci-screenshots` branch. Face tracking does not exist in the Simulator, so "eyes" there means the bot's gaze.
+- CI also runs the app in the iOS Simulator (job `simulator-smoke`): a Debug-only bot plays with the launch argument `-SpantherAutoplay eyes|touch|wink|rhythm`, the job checks that the app keeps running and that kills spend energy and reloads happen, that the wink test and a rhythm track play to the end, and it pushes screenshots, session CSVs and logs to the `ci-screenshots` branch. Face tracking does not exist in the Simulator, so "eyes" there means the bot's gaze.
 
 ## Build and run on an iPhone
 
@@ -36,6 +36,17 @@ Unit tests: `cd GazeCore && swift test` (Mac or Linux). Camera code only works o
 4. Ridge regression maps features to screen points; a One Euro filter smooths the result. Each feature is clamped to its calibrated range plus 25%, so the quadratic terms cannot throw the aim thousands of points away.
 5. When the `lookAtPoint` hit is further outside its calibrated range than the range itself, the player is looking away from the screen: the aim hides (`notLooking`) instead of flying off, and the filter restarts.
 6. 13 new dots measure mean error and jitter. The hit zone is drawn radius + that error, clamped to 30–115 pt.
+7. The aim adapter (`GazeAdapter` in `GazeCore/Adapt.swift`) adds a small correction to the ridge prediction, before the filter, so the aim stays on target when the phone is held at another tilt than at calibration. See below.
+
+## Aim adapter (the phone held differently)
+
+In the first iPhone sessions the aim slid when the phone's tilt changed after calibration. The ridge model is fitted at one grip, and the lookAt hits and pupil offsets it reads shift a little with the head's angle to the camera. The model itself is unchanged; on top of it:
+
+- correction = b + B · (head pitch and yaw − the calibration's mean pose), per screen axis. `b` takes a slow drift, `B` how the aim moves with tilt, so a new tilt is corrected before the next label.
+- It is learned from moments when the game knows where the player looks: the 13 check dots (a warm start), the rhythm start star and every rhythm note winked in its window (the median raw aim over the 0.3 s before the eye closed), and the meteor being burned in the eye game (each frame at 1/20 of a label's weight).
+- Labels lose half their weight every 15 s, a prior keeps the correction at zero until there is evidence, a label further than 180 pt from the corrected aim is left out, and the correction is capped at 150 pt.
+- Menu toggle «Подстройка прицела под наклон» turns it off to compare. The debug overlay shows the correction, labels learned and left out; the CSV has `label` rows and the correction on every frame (`corr_x_pt`, `corr_y_pt`).
+- `GazeReplay` replays it on a session (prequential: each label is predicted before it is learned) and prints the mean distance to the labels without and with the adapter, by source and by head pitch.
 
 ## Replaying a session (CLAUDE.md rule 7)
 
@@ -60,9 +71,22 @@ It refits the calibration for each feature set and prints the check error, how o
 
 Menu, «Тест подмигиваний». A click sounds every second and the screen lights the eye to wink on it: 20 left, 20 right, then 20 alternating, about 72 s. The result screen shows, per eye, how many cues the detector caught on the asked eye, the mean timing offset and its spread, how many hits land within ±100, ±180 and ±250 ms once that offset is removed, and how far the other eye squinted. «Отправить CSV» exports the session. `WinkDetector` in `GazeCore/Wink.swift` reads the same ARKit `eyeBlinkLeft/Right` values as the reload blinks: an eye is closed at 0.6 or its open level + 0.3, and both eyes closing within 50 ms is a blink, not a wink. `GazeReplay` reads the test's `wink_frame`, `cue` and `wink` rows and replays the detector at close thresholds 0.5, 0.6 and 0.7 on the same run.
 
+## Rhythm mode
+
+Menu, «Ритм: подмигивай в такт». An original rhythm game drawn as a star atlas on warm paper (light paper also lights the face for the camera). Stars appear to the beat; a dial hand goes round each one and reaches the red mark at 12 o'clock on its beat. The player looks at the star and closes an eye then. Notes hit in a row join into a constellation, and the results screen shows it as a plate.
+
+- Start: «Посмотри на звезду и подмигни». The wink on the start star (or a tap) starts the music 1 s later and gives the aim adapter its first label at the current grip.
+- Levels: easy plays the strongest accents, at least 1 s apart, and also takes an ordinary blink, for players who cannot wink yet. Normal plays more notes with either eye. Hard plays all accents up to 2 notes/s, and a note on the left half of the screen needs the left eye, on the right half the right eye.
+- Judging (`RhythmJudge` in `GazeCore/Rhythm.swift`): windows ±90 / ±160 / ±240 ms («Точно», «Хорошо», «Есть»), on the onset of the closure minus the player's delay. The aim must be within 90 / 70 / 55 pt + the check error (up to 90) of the note. The delay starts at 0.12 s, is seeded by the wink test and learned in play.
+- By finger: the hand button next to «Играть». A tap plays the note under the finger as a wink of that side's eye. It is the only way on iPhones without face tracking.
+- Tracks: three CC0 tracks composed for the game by `Tools/compose_tracks.py` («Орбита» 88 BPM, «Звёздная пыль» 104, «Метеоритный дождь» 124, about 1–1.5 min). The script writes the `.m4a` files into `SpantherGaze/Resources` and `tracks.json`: tempo, first beat and an accent list (beat, strength 1–3) from the score, which the notes follow. To use another song, put the file in Resources and give its tempo and first beat in `tracks.json`; without accents the notes follow a fixed pattern on the beats. `RhythmTests.testBundledTracks` checks the bundled tracks.
+- CSV rows: `rhythm_start`, `note_hit` and `note_miss` (judgement, timing offset, aim distance, eye), `rhythm_end`, `label` and `rhythm_frame`.
+
 ## Unverified on device
 
 - The portrait axis mapping in `Transforms.cameraPlaneToPortrait` and the Vision image orientation `.leftMirrored` are best guesses. Calibration absorbs axis mix-ups, but check them in the debug overlay.
 - 60 pt per cm is assumed for cm figures (current iPhones are 60–64).
 - Blink thresholds (0.6 closed, 0.35 open, 50–500 ms) are starting values and need tuning on real faces, children's especially.
 - Winks: whether ARKit's `eyeBlinkLeft` is the player's left eye, how much the other eye closes during a wink, and the delay from a click to the wink onset. The wink test measures all three.
+- The aim adapter's numbers (15 s half-life, 180 pt gate, 150 pt cap, the meteor label weight) are starting values. Compare the toggle on and off on the same session with `GazeReplay`.
+- Rhythm mode: the music's start against the camera clock (`AVAudioPlayer.play(atTime:)` minus the route's output latency; Bluetooth headphones add 0.15–0.25 s), the judging windows and the note density for children.

@@ -21,9 +21,13 @@ struct ResultView: View {
             }
             .frame(maxWidth: .infinity)
             VStack(spacing: 12) {
-                Button { app.route = .game } label: { Text("Играть").frame(maxWidth: .infinity) }
+                Button {
+                    if app.afterCalibration == .rhythm { app.openRhythm() } else { app.route = .game }
+                } label: {
+                    Text(app.afterCalibration == .rhythm ? "К ритм-режиму" : "Играть").frame(maxWidth: .infinity)
+                }
                     .buttonStyle(PrimaryButton())
-                Button { app.beginCalibration() } label: { Text("Откалибровать заново").frame(maxWidth: .infinity) }
+                Button { app.beginCalibration(then: app.afterCalibration) } label: { Text("Откалибровать заново").frame(maxWidth: .infinity) }
                     .buttonStyle(SecondaryButton())
                 ShareLink(item: app.logURL) { Label("Экспорт CSV", systemImage: "square.and.arrow.up") }
                     .font(.footnote)

@@ -33,6 +33,7 @@ struct RootView: View {
             case .result: ResultView()
             case .game: GameView()
             case .winkTest: WinkTestView()
+            case .rhythm: RhythmView()
             }
             if app.showDebug { DebugOverlay().allowsHitTesting(false) }
         }
