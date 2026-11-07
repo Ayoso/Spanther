@@ -250,12 +250,16 @@ jobs:
           notes = int(starts[0]["note"]) if starts else 0
           played = sum(1 for r in hits if r["judgement"] != "miss")
           judged = {r["note"] for r in hits} | {r["note"] for r in misses}
+          # The bot's aim sits near each note, so the hidden aim should be locked on the note it winks at.
+          locked = sum(1 for r in hits if r.get("locked", "") == r["note"])
           end = ends[0] if ends else {"accuracy": "0", "latency_s": "0", "score": "0"}
           print(f"{len(starts)} start, {len(ends)} end, {notes} notes, {played} played, {len(misses)} missed,"
-                f" {len(judged)} judged, accuracy {float(end['accuracy']):.2f}, learned delay {float(end['latency_s']) * 1000:.0f} ms,"
+                f" {len(judged)} judged, {locked} of {len(hits)} winks on the locked note,"
+                f" accuracy {float(end['accuracy']):.2f}, learned delay {float(end['latency_s']) * 1000:.0f} ms,"
                 f" score {end['score']}")
           # The bot skips every 11th note and winks the wrong eye on every 17th, so about 85% are played.
           ok = (len(starts) == 1 and len(ends) == 1 and notes >= 60 and len(judged) == notes and played >= 0.75 * notes
+                and locked >= 0.9 * len(hits)
                 and float(end["accuracy"]) >= 0.6 and 0.05 <= float(end["latency_s"]) <= 0.16)
           sys.exit(0 if ok else 1)
           PY
