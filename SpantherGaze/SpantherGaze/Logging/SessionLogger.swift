@@ -15,6 +15,8 @@ final class SessionLogger {
         case processingMs = "proc_ms"
         case videoFormat = "video_format", formatsOffered = "formats_offered", thermal, lowPower = "low_power"
         case screenOrientation = "screen_orientation", visionOrientation = "vision_orientation"
+        // Wink test, the groundwork for the rhythm mode.
+        case side, otherPeak = "other_peak", decisionMs = "decision_ms", period = "period_s", audioLatency = "audio_latency_s"
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -125,6 +127,32 @@ final class SessionLogger {
         r.set(.level, level)
         r.set(.blinkSec, blinkSec)
         r.set(.energy, energy)
+        write(r.line)
+    }
+
+    /// Wink test rows. `wink_test`: a run starts at `time` (its first click), with the click period and the audio
+    /// output latency the clicks were moved earlier by. `cue`: a beat that asks for a wink (time = the beat, side =
+    /// the eye asked). `wink`: a closure the detector reported (time = its onset, side, the other eye's peak and the
+    /// time until the side was known). The test's frames are `wink_frame` sample rows with the raw eyeBlink values,
+    /// so other thresholds can be replayed on the same run (CLAUDE.md rule 7).
+    func winkTest(time: Double, periodSec: Double, audioLatency: Double) {
+        var r = Row(kind: "wink_test", time: time)
+        r.set(.period, periodSec)
+        r.set(.audioLatency, audioLatency)
+        write(r.line)
+    }
+
+    func cue(side: WinkSide, time: Double) {
+        var r = Row(kind: "cue", time: time)
+        r[.side] = side.rawValue
+        write(r.line)
+    }
+
+    func wink(_ e: WinkEvent) {
+        var r = Row(kind: "wink", time: e.onset)
+        r[.side] = e.side.rawValue
+        r.set(.otherPeak, e.otherPeak)
+        r.set(.decisionMs, (e.decided - e.onset) * 1000)
         write(r.line)
     }
 

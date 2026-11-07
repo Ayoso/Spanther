@@ -32,6 +32,7 @@ struct RootView: View {
             case .check: CalibrationView(kind: .check)
             case .result: ResultView()
             case .game: GameView()
+            case .winkTest: WinkTestView()
             }
             if app.showDebug { DebugOverlay().allowsHitTesting(false) }
         }
