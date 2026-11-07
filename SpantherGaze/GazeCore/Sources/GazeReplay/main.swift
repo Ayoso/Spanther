@@ -9,7 +9,9 @@ import GazeCore
 // For each feature set it fits the calibration model the way the app does, replays the check screen and the game
 // frames, and prints the check error, how often the aim is off the screen in each level, and how often the player
 // counted as looking away. It also replays the blink detector over the game frames and compares it with the blinks
-// and reloads the app logged. The app is not in this package, so the replay copies two of its rules:
+// and reloads the app logged, the wink detector over a wink test, the target lock over a rhythm play and the aim
+// adapter over every moment the game knew where the player looked. The app is not in this package, so the replay
+// copies two of its rules:
 // a calibration dot with fewer than 20 frames is repeated and its frames are dropped, and frames with the gaze held
 // for a blink keep the previous point.
 //
@@ -125,6 +127,57 @@ if !winkFrames.isEmpty {
     }
     print("")
 }
+
+// Rhythm plays: the target lock (GazeLock) replayed over the `rhythm_frame` rows, whose gaze is the aim the app had.
+// The notes are rebuilt from the `note_hit` and `note_miss` rows (spot, beat, when each was played), the hit zone
+// from the check error as in the app. Scored by how often the note winked at was the locked one, and how often the
+// light moved.
+if let start = rows.first(where: { $0.kind == "rhythm_start" }),
+   let level = start.cells["rhythm_level"].flatMap(RhythmLevel.init(rawValue:)) {
+    struct Played { let spot: Vec2; let beat: Double; let judged: Double }
+    var notes: [Int: Played] = [:]
+    let rules0 = RhythmRules(aimRadiusPt: 0, acceptBlink: false)
+    for r in rows where r.kind == "note_hit" || r.kind == "note_miss" {
+        guard let i = r.d("note").map({ Int($0) }), let spot = target(r) else { continue }
+        if r.kind == "note_hit", let offset = r.d("offset_s") {
+            // The row's time is the closure's onset; the app judges the note when the wink is decided, frames later.
+            notes[i] = Played(spot: spot, beat: r.time - offset, judged: r.time + 0.1)
+        } else if r.kind == "note_miss" {
+            // Logged as its window closed: the beat, plus the player's delay, plus the window.
+            notes[i] = Played(spot: spot, beat: r.time - rules0.okSec - (start.d("latency_s") ?? 0), judged: r.time)
+        }
+    }
+    let checks = rows.filter { $0.kind == "check" }.compactMap { r -> Double? in
+        guard let t = target(r), let x = r.d("gaze_x_pt"), let y = r.d("gaze_y_pt") else { return nil }
+        return Vec2(x, y).distance(to: t)
+    }
+    let error = checks.isEmpty ? 60 : checks.reduce(0, +) / Double(checks.count)
+    let reach = RhythmRules.level(level, measuredErrorPt: error).aimRadiusPt
+    let order = notes.keys.sorted()
+    var lock = GazeLock()
+    var history: [(time: Double, id: Int?)] = []
+    for r in rows where r.kind == "rhythm_frame" {
+        var aim: Vec2?
+        if let x = r.d("gaze_x_pt"), let y = r.d("gaze_y_pt") { aim = Vec2(x, y) }
+        let targets = order.compactMap { i -> GazeLock.Target? in
+            guard let n = notes[i], n.beat - level.leadSec <= r.time, r.time < n.judged else { return nil }
+            return GazeLock.Target(id: i, position: n.spot, reach: reach)
+        }
+        history.append((r.time, lock.update(aim: aim, time: r.time, targets: targets)))
+    }
+    func locked(at t: Double) -> Int? { history.last(where: { $0.time <= t })?.id }
+    let hits = rows.filter { $0.kind == "note_hit" }
+    let onLocked = hits.filter { h in h.d("note").map { locked(at: h.time) == Int($0) } ?? false }
+    let offTarget = hits.filter { $0.cells["judgement"] == "miss" }
+    let saved = offTarget.filter { h in h.d("note").map { locked(at: h.time) == Int($0) } ?? false }
+    let changes = zip(history, history.dropFirst()).filter { $0.id != $1.id }.count
+    print("Rhythm play, \(level.rawValue) level, \(notes.count) notes, hit zone \(Int(reach)) pt (check error \(Int(error)) pt).")
+    print("Target lock: \(onLocked.count) of \(hits.count) winks on the locked note; \(saved.count) of \(offTarget.count) "
+          + "winks judged off target were on it. The lock changed \(changes) times; a note was lit on "
+          + "\(pct(history.filter { $0.id != nil }.count, history.count))% of the frames.")
+    print("")
+}
+
 let attempts = calibrationAttempts(rows)
 let used = attempts.filter { $0.rows.count >= 20 }
 let checkRows = rows.filter { $0.kind == "check" }
@@ -254,27 +307,47 @@ if let reference = HeadPose.mean(poseRows) {
         }
     }
     if !labels.isEmpty {
-        var adapter = GazeAdapter(reference: reference)
+        let calibrationDistance = poseRows.map(\.distance).reduce(0, +) / Double(poseRows.count)
+        typealias Sums = [String: (Double, Double, Double)]
         // [source or pitch bin: (weight, error without, error with)]
-        var bySource: [String: (Double, Double, Double)] = [:], byPitch: [String: (Double, Double, Double)] = [:]
-        for l in labels.sorted(by: { $0.time < $1.time }) {
-            let without = l.raw.distance(to: l.target), with = adapter.correct(l.raw, pose: l.pose).distance(to: l.target)
-            let deg = abs(l.pose.pitch - reference.pitch) * 180 / Double.pi
-            let bin = deg < 3 ? "pitch within 3°" : deg < 6 ? "pitch 3-6° off" : "pitch over 6° off"
-            for key in [l.source] {
-                let s = bySource[key] ?? (0, 0, 0)
-                bySource[key] = (s.0 + l.weight, s.1 + l.weight * without, s.2 + l.weight * with)
+        func replay(_ config: GazeAdapterConfig) -> (bySource: Sums, byPitch: Sums, adapter: GazeAdapter) {
+            var adapter = GazeAdapter(reference: reference, distanceM: calibrationDistance, config: config)
+            var bySource: Sums = [:], byPitch: Sums = [:]
+            for l in labels.sorted(by: { $0.time < $1.time }) {
+                let without = l.raw.distance(to: l.target), with = adapter.correct(l.raw, pose: l.pose).distance(to: l.target)
+                let deg = abs(l.pose.pitch - reference.pitch) * 180 / Double.pi
+                let bin = deg < 3 ? "pitch within 3°" : deg < 6 ? "pitch 3-6° off" : "pitch over 6° off"
+                let s = bySource[l.source] ?? (0, 0, 0)
+                bySource[l.source] = (s.0 + l.weight, s.1 + l.weight * without, s.2 + l.weight * with)
+                let p = byPitch[bin] ?? (0, 0, 0)
+                byPitch[bin] = (p.0 + l.weight, p.1 + l.weight * without, p.2 + l.weight * with)
+                adapter.learn(raw: l.raw, target: l.target, pose: l.pose, time: l.time, weight: l.weight)
             }
-            let p = byPitch[bin] ?? (0, 0, 0)
-            byPitch[bin] = (p.0 + l.weight, p.1 + l.weight * without, p.2 + l.weight * with)
-            adapter.learn(raw: l.raw, target: l.target, pose: l.pose, time: l.time, weight: l.weight)
+            return (bySource, byPitch, adapter)
         }
+        let base = replay(GazeAdapterConfig())
         print("")
         print("Aim adapter, each label scored before it is learned: mean distance to the target (cm), without -> with.")
-        for (name, s) in bySource.sorted(by: { $0.key < $1.key }) + byPitch.sorted(by: { $0.key < $1.key }) {
+        for (name, s) in base.bySource.sorted(by: { $0.key < $1.key }) + base.byPitch.sorted(by: { $0.key < $1.key }) {
             print(name.padding(toLength: 18, withPad: " ", startingAt: 0)
                   + String(format: " %6.1f labels  %5.2f -> %5.2f cm", s.0, s.1 / s.0 / 60, s.2 / s.0 / 60))
         }
-        print("Learned \(adapter.learned), left out \(adapter.rejected) as too far from the aim.")
+        print("Learned \(base.adapter.learned), left out \(base.adapter.rejected) as too far from the aim.")
+        // How the starting tilt terms (GazeAdapterConfig.followPitch / followYaw) change the result on this session:
+        // the error with the adapter on every label but the check dots, which only warm it up.
+        print("Tilt follow sweep, error with the adapter on the game's labels (cm); rows pitch, columns yaw:")
+        let yaws = [0.0, 0.5, 1.0]
+        print("         " + yaws.map { String(format: "yaw %.1f", $0) }.joined(separator: "  "))
+        for pitchFollow in [0.0, 0.5, 1.0, 1.5] {
+            let cells = yaws.map { yawFollow -> String in
+                var c = GazeAdapterConfig()
+                c.followPitch = pitchFollow
+                c.followYaw = yawFollow
+                let game = replay(c).bySource.filter { $0.key != "check" }.values
+                let w = game.map(\.0).reduce(0, +), e = game.map(\.2).reduce(0, +)
+                return w > 0 ? String(format: "  %5.2f", e / w / 60) : "      -"
+            }
+            print(String(format: "pitch %.1f", pitchFollow) + cells.joined(separator: "   "))
+        }
     }
 }

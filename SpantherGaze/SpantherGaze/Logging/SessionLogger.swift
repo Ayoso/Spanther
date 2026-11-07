@@ -21,6 +21,8 @@ final class SessionLogger {
         case track, rhythmLevel = "rhythm_level", note, judgement, offset = "offset_s", aim = "aim_pt"
         case labelSource = "label_src", accepted, corrX = "corr_x_pt", corrY = "corr_y_pt"
         case score, accuracy, latency = "latency_s"
+        // The rhythm mode's target lock: the note index the hidden aim is locked on, -1 for the start star.
+        case locked
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -72,9 +74,12 @@ final class SessionLogger {
     /// `processingMs` is the tracking queue's time for the frame (CLAUDE.md rule 4).
     /// `correction`: what the aim adapter added to the model's prediction on this frame (screen pt); the gaze
     /// column has it in. In `frame` rows the target is the meteor the game took as looked at, if any.
+    /// `locked`: in `rhythm_frame` rows, the note the aim is locked on (-1 the start star, empty none).
     func sample(kind: String, time: Double, target: Vec2?, gaze: Vec2?, f: GazeFeatures,
-                blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil, correction: Vec2? = nil) {
+                blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil, correction: Vec2? = nil,
+                locked: Int? = nil) {
         var r = Row(kind: kind, time: time)
+        r.set(.locked, locked)
         r.set(.corrX, correction?.x)
         r.set(.corrY, correction?.y)
         r.set(.targetX, target?.x)
@@ -180,10 +185,11 @@ final class SessionLogger {
 
     /// `note_hit` (time = the closure's onset) or `note_miss` (time = when its window closed): the note's index, its
     /// spot (screen pt), the judgement, closure minus note time (s, track clock), how far the aim was from the note
-    /// (pt) and the eye.
+    /// (pt), the eye and the note the aim was locked on then (a locked note counts as aimed at).
     func rhythmNote(hit: Bool, time: Double, index: Int, target: Vec2, judgement: String, offset: Double?,
-                    aimDistance: Double?, side: String?) {
+                    aimDistance: Double?, side: String?, locked: Int? = nil) {
         var r = Row(kind: hit ? "note_hit" : "note_miss", time: time)
+        r.set(.locked, locked)
         r.set(.note, index)
         r.set(.targetX, target.x)
         r.set(.targetY, target.y)

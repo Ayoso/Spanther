@@ -17,10 +17,12 @@ public struct WinkConfig: Equatable, Sendable {
     public var openRise = 0.15
     public var baselineWindowSec = 0.8
     public var baselineCap = 0.5
-    /// After the first eye closes, the other eye has this long to close too before the event counts as one eye.
-    /// In Aziz's second iPhone session (2026-11-04, 53 natural blinks) the two eyes crossed 0.6 within 0-17 ms of
-    /// each other, so 50 ms keeps blinks out of the winks with room to spare.
-    public var pairWindowSec = 0.05
+    /// The other eye has this long after the first one to close too and make the event a blink. If it closes
+    /// later, the event stays a wink of the first eye, with the other eye squinting along. Natural blinks cross the
+    /// close level within 0-17 ms of each other (Aziz's second iPhone session, 53 blinks, and the blinks in his wink
+    /// test on 2026-11-07), while in that wink test his right eye followed his left wink 33-50 ms later on 4 of 30
+    /// left cues. At least 1.5 frame intervals, so at 30 fps the next frame still counts as together.
+    public var pairWindowSec = 0.025
     /// Closures shorter than this are one bad frame, not a wink.
     public var minClosedSec = 0.05
     public init() {}
@@ -31,10 +33,10 @@ public struct WinkConfig: Equatable, Sendable {
 public struct WinkEvent: Equatable, Sendable {
     public var side: WinkSide
     public var onset: Double
-    /// When the side was decided (onset + up to pairWindowSec): the extra delay before the game can react.
+    /// When the side was decided (onset + about minClosedSec): the extra delay before the game can react.
     public var decided: Double
-    /// Highest closure of the eye that stayed open while the side was being decided (0 for `both`): how much the
-    /// other eye squints along with a wink.
+    /// Highest closure of the other eye while the side was being decided (0 for `both`): how much it squints
+    /// along with a wink. It can pass the close level when that eye closed after the pair window.
     public var otherPeak: Double
 
     public init(side: WinkSide, onset: Double, decided: Double, otherPeak: Double) {
@@ -48,7 +50,11 @@ public struct WinkEvent: Equatable, Sendable {
 public struct WinkDetector: Sendable {
     public let config: WinkConfig
     private var history: [(time: Double, left: Double, right: Double)] = []
-    private var pending: (onset: Double, leftClosed: Bool, rightClosed: Bool, otherPeak: Double)?
+    /// A closure whose side is not known yet: the eye that closed first, the pair window it got (from the frame
+    /// interval at its onset), and whether the other eye closed after that window.
+    private var pending: (onset: Double, first: WinkSide, window: Double, otherPeak: Double, otherLate: Bool)?
+    /// Time between the last two frames (s).
+    private var frameInterval = 1.0 / 60
     /// An event has been sent for the current closure: wait until both eyes are open again.
     private var latched = false
 
@@ -70,6 +76,7 @@ public struct WinkDetector: Sendable {
     /// Feed one frame. `left` / `right`: eye closure 0...1; `time` in seconds. Returns an event once its side is
     /// known, at most once per closure.
     public mutating func update(time: Double, left: Double, right: Double) -> WinkEvent? {
+        if let last = history.last?.time, time > last, time - last < 0.2 { frameInterval = time - last }
         history.removeAll { time - $0.time > config.baselineWindowSec }
         // The open level is taken before this frame joins it, so a closure never lifts its own threshold.
         let base = history.isEmpty
@@ -86,26 +93,32 @@ public struct WinkDetector: Sendable {
             return nil
         }
         if var p = pending {
-            p.leftClosed = p.leftClosed || lClosed
-            p.rightClosed = p.rightClosed || rClosed
-            if p.leftClosed && !p.rightClosed { p.otherPeak = Swift.max(p.otherPeak, right) }
-            if p.rightClosed && !p.leftClosed { p.otherPeak = Swift.max(p.otherPeak, left) }
-            pending = p
-            let bothNow = p.leftClosed && p.rightClosed
-            let reopened = (p.leftClosed && lOpen && !p.rightClosed) || (p.rightClosed && rOpen && !p.leftClosed)
+            let otherClosed = p.first == .left ? rClosed : lClosed
+            let firstOpen = p.first == .left ? lOpen : rOpen
+            let otherOpen = p.first == .left ? rOpen : lOpen
             // Frame times jitter by microseconds, so the windows get a hair of slack.
             let held = time - p.onset + 1e-6
-            if reopened && held < config.minClosedSec {
+            if otherClosed && !p.otherLate {
+                if held <= p.window {
+                    // Both eyes within the pair window: a blink.
+                    pending = nil
+                    latched = true
+                    return WinkEvent(side: .both, onset: p.onset, decided: time, otherPeak: 0)
+                }
+                p.otherLate = true
+            }
+            p.otherPeak = Swift.max(p.otherPeak, p.first == .left ? right : left)
+            pending = p
+            if firstOpen && held < config.minClosedSec && !p.otherLate {
                 // One bad frame.
                 pending = nil
                 return nil
             }
-            if bothNow || held >= config.pairWindowSec || reopened {
+            if held >= Swift.max(p.window, config.minClosedSec) || firstOpen {
                 pending = nil
-                // A wink that has already reopened needs no latch; anything still closed waits for both eyes.
-                latched = !(reopened && !bothNow)
-                let side: WinkSide = bothNow ? .both : (p.leftClosed ? .left : .right)
-                return WinkEvent(side: side, onset: p.onset, decided: time, otherPeak: side == .both ? 0 : p.otherPeak)
+                // A wink that has already reopened needs no latch; an eye still closed must open first.
+                latched = !(firstOpen && otherOpen)
+                return WinkEvent(side: p.first, onset: p.onset, decided: time, otherPeak: p.otherPeak)
             }
             return nil
         }
@@ -114,7 +127,8 @@ public struct WinkDetector: Sendable {
                 latched = true
                 return WinkEvent(side: .both, onset: time, decided: time, otherPeak: 0)
             }
-            pending = (time, lClosed, rClosed, lClosed ? right : left)
+            let window = Swift.max(config.pairWindowSec, 1.5 * frameInterval)
+            pending = (time, lClosed ? .left : .right, window, lClosed ? right : left, false)
         }
         return nil
     }

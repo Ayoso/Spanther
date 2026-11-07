@@ -298,12 +298,16 @@ public struct RhythmJudge: Sendable {
     public func expected(_ i: Int) -> Double { notes[i].time + latencySec }
 
     /// One eye closure at `time` (track clock). `aimDistance(i)`: how far the aim was from note `i` just before the
-    /// lid came down (screen pt), nil when there was no aim. Returns the note it played, or nil when it played none.
-    public mutating func closure(side: WinkSide, time: Double, aimDistance: (Int) -> Double?) -> Hit? {
+    /// lid came down (screen pt), nil when there was no aim. `prefer`: the note the aim is locked on (GazeLock); it
+    /// is played when its window holds the closure and its eye matches, even if an earlier note's window holds the
+    /// closure too. Otherwise the earliest such note is played. Returns the note it played, or nil when it played
+    /// none.
+    public mutating func closure(side: WinkSide, time: Double, aimDistance: (Int) -> Double?, prefer: Int? = nil) -> Hit? {
         var i = first
         while i < notes.count, expected(i) < time - rules.okSec { i += 1 }
-        // The earliest open note whose window holds the closure and whose eye matches.
+        // The open notes whose window holds the closure and whose eye matches: the preferred one, or the earliest.
         var sawWrongEye = false
+        var pick: Int?
         while i < notes.count, expected(i) <= time + rules.okSec {
             defer { i += 1 }
             guard results[i] == nil else { continue }
@@ -315,21 +319,25 @@ public struct RhythmJudge: Sendable {
                 sawWrongEye = true
                 continue
             }
-            let offset = time - n.time
-            let d = abs(time - expected(i))
-            let aimed = aimDistance(i).map { $0 <= rules.aimRadiusPt } ?? false
-            let j: Judgement = !aimed ? .miss : d <= rules.perfectSec ? .perfect : d <= rules.goodSec ? .good : .ok
-            record(i, j)
-            if aimed {
-                // Learn the delay slowly and within reason, so one odd wink does not move the windows.
-                latencySec = min(0.3, max(-0.05, latencySec + 0.15 * (offset - latencySec)))
-            } else {
-                offTarget += 1
-            }
-            return Hit(index: i, judgement: j, offsetSec: offset, offTarget: !aimed)
+            if pick == nil || i == prefer { pick = i }
+            if prefer == nil || i == prefer { break }
         }
-        if sawWrongEye { wrongEye += 1 } else if side != .both { stray += 1 }
-        return nil
+        guard let k = pick else {
+            if sawWrongEye { wrongEye += 1 } else if side != .both { stray += 1 }
+            return nil
+        }
+        let offset = time - notes[k].time
+        let d = abs(time - expected(k))
+        let aimed = aimDistance(k).map { $0 <= rules.aimRadiusPt } ?? false
+        let j: Judgement = !aimed ? .miss : d <= rules.perfectSec ? .perfect : d <= rules.goodSec ? .good : .ok
+        record(k, j)
+        if aimed {
+            // Learn the delay slowly and within reason, so one odd wink does not move the windows.
+            latencySec = min(0.3, max(-0.05, latencySec + 0.15 * (offset - latencySec)))
+        } else {
+            offTarget += 1
+        }
+        return Hit(index: k, judgement: j, offsetSec: offset, offTarget: !aimed)
     }
 
     /// Notes whose window has closed by `time` without a closure are missed. Returns their indices.

@@ -32,6 +32,10 @@ final class RhythmSession: ObservableObject {
     private(set) var outputLatency = 0.0
     /// The score beat the best one kept for this track and level (set when the play ends).
     var isNewBest = false
+    /// The note (its index) or the start star (`startTarget`) the hidden aim is locked on. The screen lights it up
+    /// instead of drawing the aim, and a wink plays the locked note.
+    private(set) var lock = GazeLock()
+    static let startTarget = -1
 
     private var player: AVAudioPlayer?
 
@@ -76,20 +80,46 @@ final class RhythmSession: ObservableObject {
         return true
     }
 
+    /// Moves the lock with the aim (screen pt, nil when there is none) at `host`. What can be locked: the start
+    /// star before the music, then the notes on screen that are not played yet, each within the level's hit zone.
+    func updateLock(aim: Vec2?, host: Double) {
+        let reach = judge.rules.aimRadiusPt
+        var targets: [GazeLock.Target] = []
+        switch phase {
+        case .ready:
+            targets = [GazeLock.Target(id: Self.startTarget, position: startPoint, reach: reach)]
+        case .playing:
+            let t = trackTime(host: host)
+            for i in notes.indices {
+                if notes[i].time - level.leadSec > t { break }
+                if judgedAt[i] == nil { targets.append(GazeLock.Target(id: i, position: points[i], reach: reach)) }
+            }
+        case .done:
+            break
+        }
+        lock.update(aim: aim, time: host, targets: targets)
+    }
+
     /// An eye closure with its onset (host time) and the aim as the lid came down (screen pt, nil if none).
-    /// Returns the note it played, if any.
+    /// The locked note counts as aimed at, and it is the one played when an earlier note's window holds the
+    /// closure too. Returns the note it played, if any.
     func closure(side: WinkSide, host: Double, aim: Vec2?) -> RhythmJudge.Hit? {
-        guard phase == .playing else { return nil }
-        let t = trackTime(host: host)
-        let pts = points
-        let hit = judge.closure(side: side, time: t, aimDistance: { i in aim.map { $0.distance(to: pts[i]) } })
-        if let h = hit { judgedAt[h.index] = t }
-        return hit
+        play(side: side, host: host, aim: aim, locked: lock.locked)
     }
 
     /// A tap plays like a wink of the eye on that side of the screen, aimed where the finger is (touch mode).
     func tap(at p: Vec2, host: Double) -> RhythmJudge.Hit? {
-        closure(side: p.x < screen.x / 2 ? .left : .right, host: host, aim: p)
+        play(side: p.x < screen.x / 2 ? .left : .right, host: host, aim: p, locked: nil)
+    }
+
+    private func play(side: WinkSide, host: Double, aim: Vec2?, locked: Int?) -> RhythmJudge.Hit? {
+        guard phase == .playing else { return nil }
+        let t = trackTime(host: host)
+        let pts = points
+        let hit = judge.closure(side: side, time: t, aimDistance: { i in i == locked ? 0 : aim.map { $0.distance(to: pts[i]) } },
+                                prefer: locked)
+        if let h = hit { judgedAt[h.index] = t }
+        return hit
     }
 
     /// Marks the notes whose window has passed as missed and ends the play when the music is over. Returns the
