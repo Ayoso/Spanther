@@ -9,7 +9,9 @@ import GazeCore
 // For each feature set it fits the calibration model the way the app does, replays the check screen and the game
 // frames, and prints the check error, how often the aim is off the screen in each level, and how often the player
 // counted as looking away. It also replays the blink detector over the game frames and compares it with the blinks
-// and reloads the app logged. The app is not in this package, so the replay copies two of its rules:
+// and reloads the app logged, the wink detector over a wink test, the target lock over a rhythm play and the aim
+// adapter over every moment the game knew where the player looked. The app is not in this package, so the replay
+// copies two of its rules:
 // a calibration dot with fewer than 20 frames is repeated and its frames are dropped, and frames with the gaze held
 // for a blink keep the previous point.
 //
@@ -125,6 +127,57 @@ if !winkFrames.isEmpty {
     }
     print("")
 }
+
+// Rhythm plays: the target lock (GazeLock) replayed over the `rhythm_frame` rows, whose gaze is the aim the app had.
+// The notes are rebuilt from the `note_hit` and `note_miss` rows (spot, beat, when each was played), the hit zone
+// from the check error as in the app. Scored by how often the note winked at was the locked one, and how often the
+// light moved.
+if let start = rows.first(where: { $0.kind == "rhythm_start" }),
+   let level = start.cells["rhythm_level"].flatMap(RhythmLevel.init(rawValue:)) {
+    struct Played { let spot: Vec2; let beat: Double; let judged: Double }
+    var notes: [Int: Played] = [:]
+    let rules0 = RhythmRules(aimRadiusPt: 0, acceptBlink: false)
+    for r in rows where r.kind == "note_hit" || r.kind == "note_miss" {
+        guard let i = r.d("note").map({ Int($0) }), let spot = target(r) else { continue }
+        if r.kind == "note_hit", let offset = r.d("offset_s") {
+            // The row's time is the closure's onset; the app judges the note when the wink is decided, frames later.
+            notes[i] = Played(spot: spot, beat: r.time - offset, judged: r.time + 0.1)
+        } else if r.kind == "note_miss" {
+            // Logged as its window closed: the beat, plus the player's delay, plus the window.
+            notes[i] = Played(spot: spot, beat: r.time - rules0.okSec - (start.d("latency_s") ?? 0), judged: r.time)
+        }
+    }
+    let checks = rows.filter { $0.kind == "check" }.compactMap { r -> Double? in
+        guard let t = target(r), let x = r.d("gaze_x_pt"), let y = r.d("gaze_y_pt") else { return nil }
+        return Vec2(x, y).distance(to: t)
+    }
+    let error = checks.isEmpty ? 60 : checks.reduce(0, +) / Double(checks.count)
+    let reach = RhythmRules.level(level, measuredErrorPt: error).aimRadiusPt
+    let order = notes.keys.sorted()
+    var lock = GazeLock()
+    var history: [(time: Double, id: Int?)] = []
+    for r in rows where r.kind == "rhythm_frame" {
+        var aim: Vec2?
+        if let x = r.d("gaze_x_pt"), let y = r.d("gaze_y_pt") { aim = Vec2(x, y) }
+        let targets = order.compactMap { i -> GazeLock.Target? in
+            guard let n = notes[i], n.beat - level.leadSec <= r.time, r.time < n.judged else { return nil }
+            return GazeLock.Target(id: i, position: n.spot, reach: reach)
+        }
+        history.append((r.time, lock.update(aim: aim, time: r.time, targets: targets)))
+    }
+    func locked(at t: Double) -> Int? { history.last(where: { $0.time <= t })?.id }
+    let hits = rows.filter { $0.kind == "note_hit" }
+    let onLocked = hits.filter { h in h.d("note").map { locked(at: h.time) == Int($0) } ?? false }
+    let offTarget = hits.filter { $0.cells["judgement"] == "miss" }
+    let saved = offTarget.filter { h in h.d("note").map { locked(at: h.time) == Int($0) } ?? false }
+    let changes = zip(history, history.dropFirst()).filter { $0.id != $1.id }.count
+    print("Rhythm play, \(level.rawValue) level, \(notes.count) notes, hit zone \(Int(reach)) pt (check error \(Int(error)) pt).")
+    print("Target lock: \(onLocked.count) of \(hits.count) winks on the locked note; \(saved.count) of \(offTarget.count) "
+          + "winks judged off target were on it. The lock changed \(changes) times; a note was lit on "
+          + "\(pct(history.filter { $0.id != nil }.count, history.count))% of the frames.")
+    print("")
+}
+
 let attempts = calibrationAttempts(rows)
 let used = attempts.filter { $0.rows.count >= 20 }
 let checkRows = rows.filter { $0.kind == "check" }

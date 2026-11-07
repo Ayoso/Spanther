@@ -182,6 +182,23 @@ final class RhythmTests: XCTestCase {
         XCTAssertEqual(j.closure(side: .right, time: 1.42, aimDistance: { _ in 0 })?.index, 1)
     }
 
+    func testTheLockedNoteIsPlayedWhenWindowsOverlap() {
+        // Notes 0.4 s apart: a closure at 1.2 s is in both windows (±0.24 s).
+        var plain = RhythmJudge(notes: notes([1, 1.4]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        XCTAssertEqual(plain.closure(side: .left, time: 1.2, aimDistance: { _ in 0 })?.index, 0, "the earliest by default")
+        var locked = RhythmJudge(notes: notes([1, 1.4]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        let hit = locked.closure(side: .left, time: 1.2, aimDistance: { $0 == 1 ? 0 : 200 }, prefer: 1)
+        XCTAssertEqual(hit?.index, 1)
+        XCTAssertEqual(hit?.judgement, .ok, "0.2 s early")
+        XCTAssertEqual(locked.results, [nil, .ok])
+        // A preferred note outside its window, or for the other eye, leaves the usual choice.
+        var early = RhythmJudge(notes: notes([1, 2]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        XCTAssertEqual(early.closure(side: .left, time: 1.0, aimDistance: { _ in 0 }, prefer: 1)?.index, 0)
+        var eye = RhythmJudge(notes: [RhythmNote(time: 1, x: 0.2, y: 0.5), RhythmNote(time: 1.4, x: 0.8, y: 0.5, side: .right)],
+                              rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        XCTAssertEqual(eye.closure(side: .left, time: 1.2, aimDistance: { _ in 0 }, prefer: 1)?.index, 0)
+    }
+
     func testBlinksCountOnlyOnTheEasyLevel() {
         var normal = RhythmJudge(notes: notes([1]), rules: .level(.normal, measuredErrorPt: 40), latencySec: 0)
         XCTAssertNil(normal.closure(side: .both, time: 1.0, aimDistance: { _ in 0 }))

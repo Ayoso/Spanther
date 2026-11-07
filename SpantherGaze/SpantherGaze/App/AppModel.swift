@@ -243,7 +243,7 @@ final class AppModel: ObservableObject {
         if route == .rhythm, let f = s.features {
             logger.sample(kind: "rhythm_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
                           blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
-                          correction: adapter == nil ? nil : aimCorrection)
+                          correction: adapter == nil ? nil : aimCorrection, locked: rhythm?.lock.locked)
         }
         if route == .winkTest, let f = s.features {
             logger.sample(kind: "wink_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
@@ -379,9 +379,11 @@ final class AppModel: ObservableObject {
             // A wink starts the track. An ordinary blink does not: everyone blinks while reading the screen.
             if e.side != .both { startRhythm(at: e.onset) }
         case .playing:
+            // The gaze is still held from before the lid moved, so the lock is where the player aimed.
             let aim = gazePoint
+            s.updateLock(aim: aim, host: CACurrentMediaTime())
             if let hit = s.closure(side: e.side, host: e.onset, aim: aim) {
-                record(hit, in: s, host: e.onset, side: e.side.rawValue, aim: aim)
+                record(hit, in: s, host: e.onset, side: e.side.rawValue, aim: aim, locked: s.lock.locked)
             }
         case .done:
             break
@@ -397,16 +399,16 @@ final class AppModel: ObservableObject {
             if mode == .touch || p.distance(to: s.startPoint) < 100 { startRhythm(at: now) }
         case .playing:
             guard mode == .touch, let hit = s.tap(at: p, host: now) else { return }
-            record(hit, in: s, host: now, side: p.x < s.screen.x / 2 ? "left" : "right", aim: p)
+            record(hit, in: s, host: now, side: p.x < s.screen.x / 2 ? "left" : "right", aim: p, locked: nil)
         case .done:
             break
         }
     }
 
-    private func record(_ hit: RhythmJudge.Hit, in s: RhythmSession, host: Double, side: String, aim: Vec2?) {
+    private func record(_ hit: RhythmJudge.Hit, in s: RhythmSession, host: Double, side: String, aim: Vec2?, locked: Int?) {
         let target = s.points[hit.index]
         logger.rhythmNote(hit: true, time: host, index: hit.index, target: target, judgement: hit.judgement.rawValue,
-                          offset: hit.offsetSec, aimDistance: aim.map { $0.distance(to: target) }, side: side)
+                          offset: hit.offsetSec, aimDistance: aim.map { $0.distance(to: target) }, side: side, locked: locked)
         // The closure landed in this note's window, so the note is where the player meant to look.
         if mode == .eyes { learnLabel(target: target, before: host, source: "rhythm") }
     }
@@ -428,6 +430,8 @@ final class AppModel: ObservableObject {
         #if DEBUG
         rhythmBotStep(s, now)
         #endif
+        // The aim is not drawn: the note (or the start star) it is locked on lights up instead.
+        s.updateLock(aim: mode == .eyes ? gazePoint : nil, host: now)
         guard s.phase == .playing else { return }
         for i in s.tick(host: now) {
             logger.rhythmNote(hit: false, time: now, index: i, target: s.points[i], judgement: Judgement.miss.rawValue,

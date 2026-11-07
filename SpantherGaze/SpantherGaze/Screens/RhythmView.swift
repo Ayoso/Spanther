@@ -367,7 +367,7 @@ private struct RhythmPlayView: View {
             Spacer()
             if app.mode == .eyes {
                 Text(status.faceFound
-                     ? "Так прицел подстроится под то, как ты держишь телефон. Можно и коснуться звезды."
+                     ? "Звезда засветится под взглядом. Подмигни, и игра подстроится под то, как ты держишь телефон."
                      : "Камера не видит лицо. Держи телефон напротив глаз.")
                     .font(Atlas.caption)
                     .foregroundStyle(status.faceFound ? Atlas.inkSoft : Atlas.vermilion)
@@ -385,10 +385,14 @@ private struct RhythmPlayView: View {
 
     private func draw(_ g: inout GraphicsContext, _ size: CGSize, _ host: Double) {
         let s = session
-        let aim = app.mode == .eyes ? app.gazePoint : nil
+        // The aim itself is drawn only for debugging: a cursor that sits a little off where the player looks pulls
+        // the eyes after it. The note (or the start star) the aim is locked on lights up instead.
+        let aim = app.mode == .eyes && app.showDebug ? app.gazePoint : nil
+        let lit = s.lock.locked
+        let light = Self.lightUp(since: s.lock.since, host: host)
         if s.phase == .ready {
-            drawStart(&g, s, host)
-            drawReticle(&g, aim, onTarget: aim.map { $0.distance(to: s.startPoint) < 60 } ?? false)
+            drawStart(&g, s, host, light: lit == RhythmSession.startTarget ? light : 0)
+            drawReticle(&g, aim, onTarget: lit != nil)
             return
         }
         let t = s.trackTime(host: host)
@@ -428,6 +432,8 @@ private struct RhythmPlayView: View {
             let a = min(1, max(0, 1 - dt / lead))
             var gg = g
             gg.opacity = min(1, a / 0.15)
+            let k = i == lit ? light : 0
+            if k > 0 { drawLight(&gg, p, (dialR - 3) * CGFloat(0.7 + 0.3 * k), k) }
             gg.stroke(Atlas.dial(p, dialR, 1), with: .color(Atlas.ink.opacity(0.12)), lineWidth: 1.5)
             gg.stroke(Atlas.dial(p, dialR, a), with: .color(Atlas.ink), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             // The hand's tip, and the mark it reaches on the beat.
@@ -438,7 +444,7 @@ private struct RhythmPlayView: View {
             mark.move(to: CGPoint(x: p.x, y: p.y - dialR - 6))
             mark.addLine(to: CGPoint(x: p.x, y: p.y - dialR + 6))
             gg.stroke(mark, with: .color(Atlas.vermilion), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            gg.fill(Atlas.star(p, r), with: .color(Atlas.ink))
+            gg.fill(Atlas.star(p, r * CGFloat(1 + 0.15 * k)), with: .color(Atlas.ink))
             if n.side != .any {
                 let x = n.side == .left ? p.x - dialR - 16 : p.x + dialR + 16
                 gg.stroke(Atlas.closedEye(CGPoint(x: x, y: p.y), 16), with: .color(Atlas.ink),
@@ -451,8 +457,20 @@ private struct RhythmPlayView: View {
                    at: CGPoint(x: size.width / 2, y: size.height / 2))
         }
         drawHUD(&g, s, t, size)
-        let onTarget = next.map { n in aim.map { $0.distance(to: s.points[n]) <= s.judge.rules.aimRadiusPt } ?? false } ?? false
-        drawReticle(&g, aim, onTarget: onTarget)
+        drawReticle(&g, aim, onTarget: lit != nil)
+    }
+
+    /// How far the light on a locked target is up, 0 to 1: it opens over 0.12 s from the moment of the lock.
+    private static func lightUp(since: Double?, host: Double) -> Double {
+        guard let since else { return 0 }
+        let k = min(1, max(0, (host - since) / 0.12))
+        return 1 - (1 - k) * (1 - k)
+    }
+
+    /// A warm wash under a target the aim is locked on, like a lamp held over the chart.
+    private func drawLight(_ g: inout GraphicsContext, _ p: CGPoint, _ radius: CGFloat, _ k: Double) {
+        g.fill(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius, width: 2 * radius, height: 2 * radius)),
+               with: .color(Atlas.vermilion.opacity(0.17 * k)))
     }
 
     /// How much of a played note's mark is left `age` seconds after it was judged: all of it for 4 s, then it fades
@@ -492,8 +510,9 @@ private struct RhythmPlayView: View {
         }
     }
 
-    private func drawStart(_ g: inout GraphicsContext, _ s: RhythmSession, _ host: Double) {
+    private func drawStart(_ g: inout GraphicsContext, _ s: RhythmSession, _ host: Double, light: Double) {
         let p = cg(s.startPoint)
+        if light > 0 { drawLight(&g, p, CGFloat(40 * (0.7 + 0.3 * light)), light) }
         // A dial that turns slowly while it waits, with the mark at the top.
         var dash = g
         dash.translateBy(x: p.x, y: p.y)
@@ -504,7 +523,7 @@ private struct RhythmPlayView: View {
         mark.move(to: CGPoint(x: p.x, y: p.y - 50))
         mark.addLine(to: CGPoint(x: p.x, y: p.y - 38))
         g.stroke(mark, with: .color(Atlas.vermilion), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-        g.fill(Atlas.star(p, 22), with: .color(Atlas.ink))
+        g.fill(Atlas.star(p, CGFloat(22 * (1 + 0.12 * light))), with: .color(Atlas.ink))
     }
 
     private func drawHUD(_ g: inout GraphicsContext, _ s: RhythmSession, _ t: Double, _ size: CGSize) {
