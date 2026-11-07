@@ -95,21 +95,17 @@ struct RhythmView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// The whole screen (pt), which the notes and the gaze share.
     @State private var screen = CGSize(width: 844, height: 390)
-    /// How far the safe area sits in from each edge of that screen (pt): the play screen draws edge to edge and
-    /// keeps its score and progress line inside it.
-    @State private var safe = EdgeInsets()
 
     var body: some View {
         ZStack {
             GeometryReader { geo in
                 Atlas.paper
-                    .onAppear { screen = geo.size; safe = geo.safeAreaInsets }
+                    .onAppear { screen = geo.size }
                     .onChange(of: geo.size) { screen = $0 }
-                    .onChange(of: geo.safeAreaInsets) { safe = $0 }
             }
             .ignoresSafeArea()
             if let s = app.rhythm {
-                RhythmPlayView(session: s, safe: safe)
+                RhythmPlayView(session: s)
             } else {
                 RhythmPicker(screen: screen)
             }
@@ -324,10 +320,10 @@ private struct RhythmPlayView: View {
     @EnvironmentObject var app: AppModel
     @EnvironmentObject var status: TrackingStatus
     @ObservedObject var session: RhythmSession
-    /// The safe area's insets from the screen edges (pt); the canvas below ignores the safe area, the close button
-    /// does not.
-    let safe: EdgeInsets
     @State private var touching = false
+    /// Where the close button is (screen pt, the same space as the canvas, which spans the whole screen). The
+    /// button sits inside the safe area and the canvas does not, so the HUD is laid out from this frame.
+    @State private var closeFrame = CGRect.zero
 
     /// The close button: a 44 pt square at the top right corner of the safe area, this far in from its right edge.
     private static let closeSize: CGFloat = 44, closeTrailing: CGFloat = 16
@@ -360,6 +356,11 @@ private struct RhythmPlayView: View {
                         .frame(width: Self.closeSize, height: Self.closeSize)
                 }
                 .accessibilityLabel("Закончить")
+                .background(GeometryReader { b in
+                    Color.clear
+                        .onAppear { closeFrame = b.frame(in: .global) }
+                        .onChange(of: b.frame(in: .global)) { closeFrame = $0 }
+                })
                 .padding(.trailing, Self.closeTrailing)
             }
         }
@@ -538,11 +539,15 @@ private struct RhythmPlayView: View {
     private func drawHUD(_ g: inout GraphicsContext, _ s: RhythmSession, _ t: Double, _ size: CGSize) {
         // Progress through the track: a hairline across the top, level with the close button's cross. It stops just
         // short of the button, so the score under its right end stays clear of the cross. Its left end sits as far
-        // in from the safe area as the cross does on the right (16 pt padding + 15 pt inside the button), so the
-        // band looks the same on phones with and without a notch.
-        let x0 = safe.leading + Self.closeTrailing + 15
-        let x1 = size.width - safe.trailing - Self.closeTrailing - Self.closeSize - 4
-        let y = Self.closeSize / 2
+        // in from the left edge as the cross's right side (15 pt inside the button) is from the right edge, so the
+        // band looks the same on phones with and without a notch. Until the button has been laid out, assume it
+        // sits at the top right with no safe area.
+        let cross = closeFrame.isEmpty
+            ? CGRect(x: size.width - Self.closeTrailing - Self.closeSize, y: 0, width: Self.closeSize, height: Self.closeSize)
+            : closeFrame
+        let x0 = size.width - cross.maxX + 15
+        let x1 = cross.minX - 4
+        let y = cross.midY
         let k = min(1, max(0, t / s.track.endSec))
         var all = Path(), done = Path()
         all.move(to: CGPoint(x: x0, y: y)); all.addLine(to: CGPoint(x: x1, y: y))
