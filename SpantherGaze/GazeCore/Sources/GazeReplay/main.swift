@@ -74,6 +74,57 @@ guard CommandLine.arguments.count >= 2 else {
     exit(2)
 }
 let rows = try readRows(CommandLine.arguments[1])
+
+// Wink test runs (menu: «Тест подмигиваний»): the wink detector replayed over the raw eyelid values at three close
+// thresholds, plus each eye's peak around every cue, which does not depend on any threshold.
+let winkFrames = rows.filter { $0.kind == "wink_frame" }
+if !winkFrames.isEmpty {
+    let cueRows = rows.filter { $0.kind == "cue" }
+    let cues = cueRows.compactMap { r -> (cue: WinkTestPlan.Cue, time: Double)? in
+        guard let side = WinkSide(rawValue: r.cells["side"] ?? "") else { return nil }
+        return (WinkTestPlan.Cue(side: side, offset: 0, block: 0), r.time)
+    }
+    let latency = rows.first { $0.kind == "wink_test" }?.d("audio_latency_s") ?? 0
+    print("Wink test: \(rows.filter { $0.kind == "wink_test" }.count) run(s), \(cues.count) cues, "
+          + "\(rows.filter { $0.kind == "wink" }.count) closures logged by the app, \(winkFrames.count) frames, "
+          + String(format: "audio latency %.0f ms", latency * 1000))
+    func median(_ v: [Double]) -> Double { v.isEmpty ? .nan : v.sorted()[v.count / 2] }
+    func p90(_ v: [Double]) -> Double { v.isEmpty ? .nan : v.sorted()[min(v.count - 1, Int(Double(v.count) * 0.9))] }
+    for side in [WinkSide.left, .right] {
+        var asked: [Double] = [], other: [Double] = []
+        for c in cues where c.cue.side == side {
+            let near = winkFrames.filter { abs($0.time - c.time) <= 0.45 }
+            let l = near.compactMap { $0.d("blink_l") }.max() ?? .nan, r = near.compactMap { $0.d("blink_r") }.max() ?? .nan
+            asked.append(side == .left ? l : r)
+            other.append(side == .left ? r : l)
+        }
+        print("  \(side.rawValue) cues: " + String(format: "asked eye peak median %.2f (lowest %.2f), other eye peak median %.2f (p90 %.2f)",
+                                                    median(asked), asked.min() ?? .nan, median(other), p90(other)))
+    }
+    print("  close  | left: hits wrong both  mean   sd  ±100/180/250 other | right: hits wrong both  mean   sd  ±100/180/250 other | stray wink blink")
+    for threshold in [0.5, 0.6, 0.7] {
+        var config = WinkConfig()
+        config.closeThreshold = threshold
+        var detector = WinkDetector(config)
+        var events: [WinkEvent] = []
+        var last: Double?
+        for r in winkFrames {
+            guard let l = r.d("blink_l"), let rr = r.d("blink_r") else { continue }
+            if let t = last, r.time - t > 0.2 { detector.faceLost() }
+            last = r.time
+            if let e = detector.update(time: r.time, left: l, right: rr) { events.append(e) }
+        }
+        let s = WinkStats.compute(cues: cues.map(\.cue), beats: cues.map(\.time), events: events)
+        func eye(_ e: WinkStats.Eye) -> String {
+            String(format: "%2d/%-2d %4d %4d %+5.0f %4.0f  %2d/%2d/%2d    %.2f",
+                   e.hits, e.cues, e.wrongEye, e.bothEyes, e.meanOffsetMs, e.sdOffsetMs,
+                   e.within100, e.within180, e.within250, e.medianOtherPeak)
+        }
+        print(String(format: "  %.1f    | ", threshold) + eye(s.left) + " | " + eye(s.right)
+              + String(format: " | %4d %5d", s.strayOneEye, s.strayBoth))
+    }
+    print("")
+}
 let attempts = calibrationAttempts(rows)
 let used = attempts.filter { $0.rows.count >= 20 }
 let checkRows = rows.filter { $0.kind == "check" }
@@ -82,7 +133,7 @@ let targets = used.map(\.target)
 guard let minX = targets.map(\.x).min(), let maxX = targets.map(\.x).max(),
       let minY = targets.map(\.y).min(), let maxY = targets.map(\.y).max(), maxX > minX, maxY > minY else {
     print("no usable calibration in this file")
-    exit(1)
+    exit(winkFrames.isEmpty ? 1 : 0)
 }
 // Calibration dots sit at 10% and 90% of the screen.
 let screen = Vec2((maxX - minX) / 0.8, (maxY - minY) / 0.8)

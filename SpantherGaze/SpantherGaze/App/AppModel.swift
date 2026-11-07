@@ -8,6 +8,8 @@ enum Route: Equatable {
     case check
     case result
     case game
+    /// Measures one-eye winks before the rhythm mode is built.
+    case winkTest
 }
 
 enum ControlMode { case eyes, touch }
@@ -29,6 +31,9 @@ final class TrackingStatus: ObservableObject {
     @Published var blinksTotal = 0
     /// Camera format, formats offered, thermal state and Low Power Mode.
     @Published var tracking = TrackingInfo()
+    /// Wink test: the last closure the wink detector reported, and the level at which each eye counts as closed.
+    @Published var lastWink: WinkEvent?
+    @Published var winkCloseLevel: (left: Double, right: Double) = (0.6, 0.6)
 }
 
 /// App state shared by all screens. Main thread only.
@@ -50,6 +55,9 @@ final class AppModel: ObservableObject {
     private var filter = OneEuroFilter2D()
     private var lastStatusPush = 0.0
     private var blinkDetector = BlinkDetector(EnergyConfig())
+    private var winkDetector = WinkDetector()
+    /// Closures the wink detector reported since the current wink test run started (tracking clock).
+    private(set) var winks: [WinkEvent] = []
     /// Time of the last 3-blink reload not yet taken by the game.
     private var pendingReloadTime: Double?
     private var lastSampleTime = 0.0
@@ -78,8 +86,13 @@ final class AppModel: ObservableObject {
         if !FaceTracker.isSupported { mode = .touch }
         if let bot = autoplay {
             // CI smoke test in the Simulator: skip the menu and let the bot play.
-            mode = bot == "eyes" ? .eyes : .touch
-            route = .game
+            if bot == "wink" {
+                route = .winkTest
+                startWinkBot()
+            } else {
+                mode = bot == "eyes" ? .eyes : .touch
+                route = .game
+            }
         }
         tracker.onSample = { [weak self] s in self?.handle(s) }
         tracker.onInfo = { [weak self] info in
@@ -116,6 +129,18 @@ final class AppModel: ObservableObject {
             if blink.reload { pendingReloadTime = s.timestamp }
         } else {
             blinkDetector.faceLost()
+        }
+
+        if route == .winkTest {
+            if s.features != nil, let b = s.blink {
+                if let e = winkDetector.update(time: s.timestamp, left: b.left, right: b.right) {
+                    winks.append(e)
+                    logger.wink(e)
+                    status.lastWink = e
+                }
+            } else {
+                winkDetector.faceLost()
+            }
         }
 
         if s.features != nil, blink.freezeGaze {
@@ -160,7 +185,12 @@ final class AppModel: ObservableObject {
             logger.sample(kind: "frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
                           blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs)
         }
-        if s.timestamp - lastStatusPush > 0.1 {
+        if route == .winkTest, let f = s.features {
+            logger.sample(kind: "wink_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
+                          blink: s.blink, hold: false, processingMs: s.processingMs)
+        }
+        // The wink test draws the eyelids live, so it gets the numbers 30 times a second.
+        if s.timestamp - lastStatusPush > (route == .winkTest ? 1.0 / 30 : 0.1) {
             lastStatusPush = s.timestamp
             status.fps = s.fps
             status.processingMs = s.processingMs
@@ -171,6 +201,7 @@ final class AppModel: ObservableObject {
             status.blinkBase = blinkDetector.openLevel()
             status.gazeFrozen = blink.freezeGaze
             status.pendingBlinks = blinkDetector.pendingBlinks(at: s.timestamp)
+            if route == .winkTest { status.winkCloseLevel = winkDetector.closeLevel() }
         }
     }
 
@@ -190,6 +221,45 @@ final class AppModel: ObservableObject {
     }
 
     var gazePoint: Vec2? { if case .point(let p) = gaze { return p }; return nil }
+
+    // MARK: wink test
+
+    /// Opens the wink test with a fresh session CSV, so «Экспорт CSV» sends just the test.
+    func beginWinkTest() {
+        logger = SessionLogger()
+        logTracking()
+        winkDetector = WinkDetector()
+        winks = []
+        status.lastWink = nil
+        route = .winkTest
+    }
+
+    /// A run starts: its first click sounds at `time`. Closures from before it are dropped.
+    func startWinkRun(plan: WinkTestPlan, time: Double, audioLatency: Double) {
+        winks = []
+        status.lastWink = nil
+        logger.winkTest(time: time, periodSec: plan.periodSec, audioLatency: audioLatency)
+        if autoplay == "wink" { winkBot = WinkBot(plan: plan, start: time) }
+    }
+
+    /// Simulator smoke test (`-SpantherAutoplay wink`): a scripted player's eyelids go through `handle` 60 times a
+    /// second, as if ARKit had sent them, with a face that looks straight at the screen.
+    private var winkBot: WinkBot?
+    private var botTimer: Timer?
+
+    private func startWinkBot() {
+        let face = GazeFeatures(lookAtHit: .zero, eyeAxisHit: .zero, yaw: 0, pitch: 0, roll: 0, distance: 0.35, pupils: nil)
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let t = CACurrentMediaTime()
+            let lids = self.winkBot?.lids(at: t) ?? (left: 0.1, right: 0.1)
+            self.handle(TrackingSample(timestamp: t, features: face, blink: lids, processingMs: 0.5, fps: 60))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        botTimer = timer
+    }
+
+    func logWinkCue(side: WinkSide, time: Double) { logger.cue(side: side, time: time) }
 
     // MARK: calibration
 

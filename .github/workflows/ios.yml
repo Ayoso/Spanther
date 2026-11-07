@@ -182,6 +182,48 @@ jobs:
             then pass "$mode: energy accounting matches balance.json"; else fail "$mode: energy accounting (see $mode.energy.txt)"; fi
             xcrun simctl terminate "$UDID" "$BID" || true
           done
+
+          # Wink test: a scripted player winks on the cues (WinkBot), since the Simulator has no face tracking.
+          # The run starts 5 s after the screen opens and takes about 77 s.
+          xcrun simctl launch --stdout="$OUT/wink.stdout.log" --stderr="$OUT/wink.stderr.log" "$UDID" "$BID" -SpantherAutoplay wink
+          sleep 4; shot wink-0-intro
+          sleep 11; shot wink-1-left-a
+          sleep 0.4; shot wink-1-left-b
+          sleep 25; shot wink-2-right
+          sleep 23; shot wink-3-alternating
+          sleep 26; shot wink-4-results
+          if running; then pass "wink: app running after the test"; else fail "wink: app not running after the test"; fi
+          DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null) || true
+          CSV=$(ls -t "$DATA"/tmp/spanther-*.csv 2>/dev/null | head -n 1) || true
+          if [ -n "$CSV" ]; then cp "$CSV" "$OUT/wink.csv"; fi
+          if python3 - "$OUT/wink.csv" > "$OUT/wink.check.txt" 2>&1 <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          runs = sum(1 for r in rows if r["kind"] == "wink_test")
+          frames = sum(1 for r in rows if r["kind"] == "wink_frame")
+          cues = [(float(r["time"]), r["side"]) for r in rows if r["kind"] == "cue"]
+          winks = [(float(r["time"]), r["side"]) for r in rows if r["kind"] == "wink"]
+          used, asked, hits, wrong, both = set(), {"left": 0, "right": 0}, {"left": 0, "right": 0}, 0, 0
+          for t, side in cues:
+              asked[side] += 1
+              near = [(abs(w[0] - t), i) for i, w in enumerate(winks) if i not in used and abs(w[0] - t) <= 0.45]
+              if not near:
+                  continue
+              i = min(near)[1]
+              used.add(i)
+              if winks[i][1] == side:
+                  hits[side] += 1
+              elif winks[i][1] == "both":
+                  both += 1
+              else:
+                  wrong += 1
+          # WinkBot answers 27 of 30 left cues and 24 of 30 right ones with the asked eye.
+          print(f"{runs} run, {len(cues)} cues, {len(winks)} closures, {frames} frames, hits left {hits['left']}/{asked['left']}"
+                f" right {hits['right']}/{asked['right']}, wrong eye {wrong}, both eyes {both}")
+          sys.exit(0 if runs == 1 and len(cues) == 60 and frames >= 3000 and hits["left"] >= 25 and hits["right"] >= 22 else 1)
+          PY
+          then pass "wink: $(tail -n 1 "$OUT/wink.check.txt")"; else fail "wink: $(tail -n 1 "$OUT/wink.check.txt")"; fi
+          xcrun simctl terminate "$UDID" "$BID" || true
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
       - name: Menu on the smallest screen (iPhone SE, 4.7 inch)
