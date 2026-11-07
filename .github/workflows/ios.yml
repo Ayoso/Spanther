@@ -269,7 +269,7 @@ jobs:
           xcrun simctl terminate "$UDID" "$BID" || true
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
-      - name: Menu on the smallest screen (iPhone SE, 4.7 inch)
+      - name: Menu and rhythm track list on the smallest screen (iPhone SE, 4.7 inch)
         run: |
           OUT="$PWD/out"; BID=com.spanther.SpantherGaze
           SE=$(xcrun simctl list devices available --json | python3 -c '
@@ -291,6 +291,19 @@ jobs:
           else
             echo "FAIL menu on iPhone SE: app not running" >> "$OUT/checks.txt"
           fi
+          # The rhythm track list, the widest screen of the mode: the bot waits 8 s on it before it starts a track.
+          xcrun simctl terminate "$SE" "$BID" || true
+          xcrun simctl launch "$SE" "$BID" -SpantherAutoplay rhythm
+          sleep 5
+          xcrun simctl io "$SE" screenshot --type=png "$OUT/tmp.png" >/dev/null 2>&1 \
+            && sips -s format jpeg -s formatOptions 80 -Z 1200 "$OUT/tmp.png" --out "$OUT/rhythm-0-tracks-se.jpg" >/dev/null 2>&1
+          rm -f "$OUT/tmp.png"
+          if xcrun simctl spawn "$SE" launchctl list | grep -q "UIKitApplication:$BID"; then
+            echo "PASS rhythm track list on iPhone SE: app running" >> "$OUT/checks.txt"
+          else
+            echo "FAIL rhythm track list on iPhone SE: app not running" >> "$OUT/checks.txt"
+          fi
+          xcrun simctl terminate "$SE" "$BID" || true
       - name: Publish to the ci-screenshots branch
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         env:
