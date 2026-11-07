@@ -36,6 +36,11 @@ struct MenuView: View {
                     app.route = .game
                 } label: { Text("Играть пальцем").frame(maxWidth: .infinity) }
                     .buttonStyle(SecondaryButton())
+                Button { app.openRhythm() } label: {
+                    Label("Ритм: подмигивай в такт", systemImage: "metronome").frame(maxWidth: .infinity)
+                }
+                    .buttonStyle(SecondaryButton())
+                    .disabled(app.rhythmTracks.isEmpty)
             }
             if app.eyeTrackingSupported && app.cameraDenied {
                 VStack(spacing: 8) {
@@ -54,6 +59,7 @@ struct MenuView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Toggle("Зрачки через Vision", isOn: $app.usePupils).font(.footnote).foregroundStyle(Palette.dim)
+            Toggle("Подстройка прицела под наклон", isOn: $app.adaptAim).font(.footnote).foregroundStyle(Palette.dim)
             Toggle("Отладка", isOn: $app.showDebug).font(.footnote).foregroundStyle(Palette.dim)
             ShareLink(item: app.logURL) { Label("Экспорт CSV последней сессии", systemImage: "square.and.arrow.up") }
                 .font(.footnote)

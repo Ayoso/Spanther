@@ -51,6 +51,13 @@ final class TransformsTests: XCTestCase {
         }
     }
 
+    func testPlayAreaToScreen() {
+        let screen = Vec2(844, 390)   // iPhone 13 in landscape
+        XCTAssertEqual(Transforms.playAreaToScreen(x: 0, y: 0, size: screen), Vec2(0, 0), "top left")
+        XCTAssertEqual(Transforms.playAreaToScreen(x: 1, y: 1, size: screen), Vec2(844, 390), "bottom right")
+        XCTAssertEqual(Transforms.playAreaToScreen(x: 0.5, y: 0.25, size: screen), Vec2(422, 97.5))
+    }
+
     /// Camera +x runs toward the bottom of the phone and +y to its right in portrait (checked on the iPhone 13).
     /// Turning the phone turns the screen axes with it: a quarter turn with the camera going left (landscapeRight)
     /// turns a screen vector a quarter turn counterclockwise as the player sees it, (x, y) -> (y, -x) with y down.

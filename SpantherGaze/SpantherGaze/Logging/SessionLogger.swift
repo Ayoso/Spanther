@@ -17,6 +17,10 @@ final class SessionLogger {
         case screenOrientation = "screen_orientation", visionOrientation = "vision_orientation"
         // Wink test, the groundwork for the rhythm mode.
         case side, otherPeak = "other_peak", decisionMs = "decision_ms", period = "period_s", audioLatency = "audio_latency_s"
+        // Rhythm mode and the aim adapter.
+        case track, rhythmLevel = "rhythm_level", note, judgement, offset = "offset_s", aim = "aim_pt"
+        case labelSource = "label_src", accepted, corrX = "corr_x_pt", corrY = "corr_y_pt"
+        case score, accuracy, latency = "latency_s"
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -66,9 +70,13 @@ final class SessionLogger {
     /// eye-controlled game) do not. Raw eyeBlink values and the gaze-hold flag let blink thresholds be replayed
     /// offline on the same session (CLAUDE.md rule 7). Target and gaze in screen pt, hits in metres.
     /// `processingMs` is the tracking queue's time for the frame (CLAUDE.md rule 4).
+    /// `correction`: what the aim adapter added to the model's prediction on this frame (screen pt); the gaze
+    /// column has it in. In `frame` rows the target is the meteor the game took as looked at, if any.
     func sample(kind: String, time: Double, target: Vec2?, gaze: Vec2?, f: GazeFeatures,
-                blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil) {
+                blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil, correction: Vec2? = nil) {
         var r = Row(kind: kind, time: time)
+        r.set(.corrX, correction?.x)
+        r.set(.corrY, correction?.y)
         r.set(.targetX, target?.x)
         r.set(.targetY, target?.y)
         r.set(.gazeX, gaze?.x)
@@ -153,6 +161,64 @@ final class SessionLogger {
         r[.side] = e.side.rawValue
         r.set(.otherPeak, e.otherPeak)
         r.set(.decisionMs, (e.decided - e.onset) * 1000)
+        write(r.line)
+    }
+
+    /// Rhythm mode. `rhythm_start`: the music's first sample is heard at `time`; the row has the track, the level,
+    /// the beat length, the audio route latency, the wink delay the judge starts from and the number of notes.
+    func rhythmStart(time: Double, track: String, level: String, beatSec: Double, audioLatency: Double,
+                     latency: Double, notes: Int) {
+        var r = Row(kind: "rhythm_start", time: time)
+        r[.track] = track
+        r[.rhythmLevel] = level
+        r.set(.period, beatSec)
+        r.set(.audioLatency, audioLatency)
+        r.set(.latency, latency)
+        r.set(.note, notes)
+        write(r.line)
+    }
+
+    /// `note_hit` (time = the closure's onset) or `note_miss` (time = when its window closed): the note's index, its
+    /// spot (screen pt), the judgement, closure minus note time (s, track clock), how far the aim was from the note
+    /// (pt) and the eye.
+    func rhythmNote(hit: Bool, time: Double, index: Int, target: Vec2, judgement: String, offset: Double?,
+                    aimDistance: Double?, side: String?) {
+        var r = Row(kind: hit ? "note_hit" : "note_miss", time: time)
+        r.set(.note, index)
+        r.set(.targetX, target.x)
+        r.set(.targetY, target.y)
+        r[.judgement] = judgement
+        r.set(.offset, offset)
+        r.set(.aim, aimDistance)
+        r[.side] = side ?? ""
+        write(r.line)
+    }
+
+    /// `rhythm_end`: score, accuracy (0...1) and the wink delay the judge learned.
+    func rhythmEnd(time: Double, score: Int, accuracy: Double, latency: Double) {
+        var r = Row(kind: "rhythm_end", time: time)
+        r.set(.score, score)
+        r.set(.accuracy, accuracy)
+        r.set(.latency, latency)
+        write(r.line)
+    }
+
+    /// `label`: a moment the game knows where the player looked (`target`, screen pt), taught to the aim adapter.
+    /// gaze = the model's raw prediction then (screen pt, before the correction), with the head pose; accepted = 0
+    /// when the adapter left it out as too far from the aim; corr = the correction for that pose after it.
+    func label(time: Double, source: String, target: Vec2, raw: Vec2, pitch: Double, yaw: Double, accepted: Bool,
+               correction: Vec2) {
+        var r = Row(kind: "label", time: time)
+        r[.labelSource] = source
+        r.set(.targetX, target.x)
+        r.set(.targetY, target.y)
+        r.set(.gazeX, raw.x)
+        r.set(.gazeY, raw.y)
+        r.set(.pitch, pitch)
+        r.set(.yaw, yaw)
+        r[.accepted] = accepted ? "1" : "0"
+        r.set(.corrX, correction.x)
+        r.set(.corrY, correction.y)
         write(r.line)
     }
 

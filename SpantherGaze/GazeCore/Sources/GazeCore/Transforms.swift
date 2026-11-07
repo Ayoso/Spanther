@@ -88,6 +88,10 @@ public enum Transforms {
         }
     }
 
+    /// Rhythm mode: a note's place in the play area (0...1 from the left edge to the right one and from the top edge
+    /// to the bottom one, as the player sees the screen) -> screen pt, for a screen `size` pt across and down.
+    public static func playAreaToScreen(x: Double, y: Double, size: Vec2) -> Vec2 { Vec2(x * size.x, y * size.y) }
+
     /// EXIF orientation (the raw value of CGImagePropertyOrientation) that stands ARKit's front-camera image upright
     /// for a player facing the screen held this way (CLAUDE.md rule 3). Portrait is 5 (leftMirrored): with it Vision
     /// found pupils on 99-100% of frames on the iPhone 13. The landscape values come from Apple's Vision face tracking

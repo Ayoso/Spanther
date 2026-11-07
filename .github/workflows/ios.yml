@@ -224,6 +224,42 @@ jobs:
           PY
           then pass "wink: $(tail -n 1 "$OUT/wink.check.txt")"; else fail "wink: $(tail -n 1 "$OUT/wink.check.txt")"; fi
           xcrun simctl terminate "$UDID" "$BID" || true
+
+          # Rhythm mode: the bot picks the fastest track on hard after 4 s, winks at the start star 4 s later, then
+          # looks at each note and winks the asked eye about 0.1 s after its beat. The track takes about 61 s.
+          xcrun simctl launch --stdout="$OUT/rhythm.stdout.log" --stderr="$OUT/rhythm.stderr.log" "$UDID" "$BID" -SpantherAutoplay rhythm
+          sleep 3; shot rhythm-0-tracks
+          sleep 3; shot rhythm-1-start
+          sleep 9; shot rhythm-2-play-a
+          sleep 0.3; shot rhythm-2-play-b
+          sleep 15; shot rhythm-3-play
+          sleep 20; shot rhythm-4-play
+          sleep 26; shot rhythm-5-results
+          if running; then pass "rhythm: app running after the track"; else fail "rhythm: app not running after the track"; fi
+          DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null) || true
+          CSV=$(ls -t "$DATA"/tmp/spanther-*.csv 2>/dev/null | head -n 1) || true
+          if [ -n "$CSV" ]; then cp "$CSV" "$OUT/rhythm.csv"; fi
+          if python3 - "$OUT/rhythm.csv" > "$OUT/rhythm.check.txt" 2>&1 <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          starts = [r for r in rows if r["kind"] == "rhythm_start"]
+          ends = [r for r in rows if r["kind"] == "rhythm_end"]
+          hits = [r for r in rows if r["kind"] == "note_hit"]
+          misses = [r for r in rows if r["kind"] == "note_miss"]
+          notes = int(starts[0]["note"]) if starts else 0
+          played = sum(1 for r in hits if r["judgement"] != "miss")
+          judged = {r["note"] for r in hits} | {r["note"] for r in misses}
+          end = ends[0] if ends else {"accuracy": "0", "latency_s": "0", "score": "0"}
+          print(f"{len(starts)} start, {len(ends)} end, {notes} notes, {played} played, {len(misses)} missed,"
+                f" {len(judged)} judged, accuracy {float(end['accuracy']):.2f}, learned delay {float(end['latency_s']) * 1000:.0f} ms,"
+                f" score {end['score']}")
+          # The bot skips every 11th note and winks the wrong eye on every 17th, so about 85% are played.
+          ok = (len(starts) == 1 and len(ends) == 1 and notes >= 60 and len(judged) == notes and played >= 0.75 * notes
+                and float(end["accuracy"]) >= 0.6 and 0.05 <= float(end["latency_s"]) <= 0.16)
+          sys.exit(0 if ok else 1)
+          PY
+          then pass "rhythm: $(tail -n 1 "$OUT/rhythm.check.txt")"; else fail "rhythm: $(tail -n 1 "$OUT/rhythm.check.txt")"; fi
+          xcrun simctl terminate "$UDID" "$BID" || true
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
       - name: Menu on the smallest screen (iPhone SE, 4.7 inch)

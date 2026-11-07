@@ -37,6 +37,7 @@ struct GameView: View {
         s.blinkReload = { [weak model] in model?.consumeBlinkReload() ?? false }
         s.pendingBlinks = { [weak model] in model?.pendingBlinks ?? 0 }
         s.onGameEvent = { [weak model] kind, energy, level in model?.logGameEvent(kind: kind, energy: energy, level: level) }
+        s.onLookedAt = { [weak model] p in model?.lookedAtMeteor = p }
         return s
     }
 }
