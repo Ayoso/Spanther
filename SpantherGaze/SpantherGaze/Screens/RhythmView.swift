@@ -321,6 +321,12 @@ private struct RhythmPlayView: View {
     @EnvironmentObject var status: TrackingStatus
     @ObservedObject var session: RhythmSession
     @State private var touching = false
+    /// Where the close button is (screen pt, the same space as the canvas, which spans the whole screen). The
+    /// button sits inside the safe area and the canvas does not, so the HUD is laid out from this frame.
+    @State private var closeFrame = CGRect.zero
+
+    /// The close button: a 44 pt square at the top right corner of the safe area, this far in from its right edge.
+    private static let closeSize: CGFloat = 44, closeTrailing: CGFloat = 16
 
     var body: some View {
         if session.phase == .done {
@@ -347,11 +353,15 @@ private struct RhythmPlayView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Atlas.inkSoft)
-                        .frame(width: 44, height: 44)
+                        .frame(width: Self.closeSize, height: Self.closeSize)
                 }
                 .accessibilityLabel("Закончить")
-                .padding(.trailing, 16)
-                .padding(.top, 8)
+                .background(GeometryReader { b in
+                    Color.clear
+                        .onAppear { closeFrame = b.frame(in: .global) }
+                        .onChange(of: b.frame(in: .global)) { closeFrame = $0 }
+                })
+                .padding(.trailing, Self.closeTrailing)
             }
         }
     }
@@ -527,8 +537,17 @@ private struct RhythmPlayView: View {
     }
 
     private func drawHUD(_ g: inout GraphicsContext, _ s: RhythmSession, _ t: Double, _ size: CGSize) {
-        // Progress through the track: a hairline across the top.
-        let x0: CGFloat = 64, x1 = size.width - 80, y: CGFloat = 20
+        // Progress through the track: a hairline across the top, level with the close button's cross. It stops just
+        // short of the button, so the score under its right end stays clear of the cross. Its left end sits as far
+        // in from the left edge as the cross's right side (15 pt inside the button) is from the right edge, so the
+        // band looks the same on phones with and without a notch. Until the button has been laid out, assume it
+        // sits at the top right with no safe area.
+        let cross = closeFrame.isEmpty
+            ? CGRect(x: size.width - Self.closeTrailing - Self.closeSize, y: 0, width: Self.closeSize, height: Self.closeSize)
+            : closeFrame
+        let x0 = size.width - cross.maxX + 15
+        let x1 = cross.minX - 4
+        let y = cross.midY
         let k = min(1, max(0, t / s.track.endSec))
         var all = Path(), done = Path()
         all.move(to: CGPoint(x: x0, y: y)); all.addLine(to: CGPoint(x: x1, y: y))
