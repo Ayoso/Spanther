@@ -44,17 +44,21 @@ enum Atlas {
         }
     }
 
+    /// The point `radius` from `c` at `angle` (radians from 3 o'clock, clockwise on screen, where y points down).
+    /// The cosine is taken in Double on purpose: with CGFloat around it, `cos` is ambiguous between the
+    /// CoreGraphics and the Double overloads.
+    static func polar(_ c: CGPoint, _ radius: CGFloat, _ angle: Double) -> CGPoint {
+        let dx: Double = cos(angle), dy: Double = sin(angle)
+        return CGPoint(x: c.x + CGFloat(dx) * radius, y: c.y + CGFloat(dy) * radius)
+    }
+
     /// A four-pointed star with curved sides, the atlas's mark for a note.
     static func star(_ c: CGPoint, _ r: CGFloat) -> Path {
         var p = Path()
-        let tips = (0..<4).map { k -> CGPoint in
-            let a = Double(k) * .pi / 2 - .pi / 2
-            return CGPoint(x: c.x + cos(a) * r, y: c.y + sin(a) * r)
-        }
+        let tips = (0..<4).map { k in polar(c, r, Double(k) * .pi / 2 - .pi / 2) }
         p.move(to: tips[0])
         for k in 0..<4 {
-            let a = Double(k) * .pi / 2 - .pi / 4
-            let ctrl = CGPoint(x: c.x + cos(a) * r * 0.2, y: c.y + sin(a) * r * 0.2)
+            let ctrl = polar(c, r * 0.2, Double(k) * .pi / 2 - .pi / 4)
             p.addQuadCurve(to: tips[(k + 1) % 4], control: ctrl)
         }
         p.closeSubpath()
@@ -66,7 +70,7 @@ enum Atlas {
         var p = Path()
         p.move(to: CGPoint(x: c.x - w / 2, y: c.y))
         p.addQuadCurve(to: CGPoint(x: c.x + w / 2, y: c.y), control: CGPoint(x: c.x, y: c.y + w * 0.6))
-        for k in [-1.0, 0.0, 1.0] {
+        for k: CGFloat in [-1, 0, 1] {
             let x = c.x + k * w * 0.27, y = c.y + w * 0.3 * (1 - abs(k) * 0.4)
             p.move(to: CGPoint(x: x, y: y))
             p.addLine(to: CGPoint(x: x + k * w * 0.1, y: y + w * 0.24))
@@ -79,8 +83,7 @@ enum Atlas {
         var p = Path()
         let steps = max(2, Int(64 * fraction))
         for k in 0...steps {
-            let a = -Double.pi / 2 + 2 * .pi * fraction * Double(k) / Double(steps)
-            let pt = CGPoint(x: c.x + cos(a) * r, y: c.y + sin(a) * r)
+            let pt = polar(c, r, -Double.pi / 2 + 2 * .pi * fraction * Double(k) / Double(steps))
             if k == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
         }
         return p
@@ -420,7 +423,7 @@ private struct RhythmPlayView: View {
             gg.stroke(Atlas.dial(p, dialR, a), with: .color(Atlas.ink), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             // The hand's tip, and the mark it reaches on the beat.
             let ang = -Double.pi / 2 + 2 * .pi * a
-            let tip = CGPoint(x: p.x + cos(ang) * dialR, y: p.y + sin(ang) * dialR)
+            let tip = Atlas.polar(p, dialR, ang)
             gg.fill(Path(ellipseIn: CGRect(x: tip.x - 3.5, y: tip.y - 3.5, width: 7, height: 7)), with: .color(Atlas.ink))
             var mark = Path()
             mark.move(to: CGPoint(x: p.x, y: p.y - dialR - 6))
@@ -515,8 +518,8 @@ private struct RhythmPlayView: View {
         var ticks = Path()
         for k in 0..<4 {
             let ang = Double(k) * .pi / 2
-            ticks.move(to: CGPoint(x: p.x + cos(ang) * 17, y: p.y + sin(ang) * 17))
-            ticks.addLine(to: CGPoint(x: p.x + cos(ang) * 22, y: p.y + sin(ang) * 22))
+            ticks.move(to: Atlas.polar(p, 17, ang))
+            ticks.addLine(to: Atlas.polar(p, 22, ang))
         }
         g.stroke(ticks, with: .color(Atlas.ink.opacity(0.8)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
     }
