@@ -13,7 +13,7 @@ Eye-controlled iPhone game for attention training (kids 6–10). Meteors fly at 
 - Apple ID. Бесплатного хватит.
 
 Шаги:
-1. Скачай проект: `git clone https://github.com/Ayoso/Spanther.git` или на странице репозитория Code → Download ZIP, потом распакуй.
+1. Скачай проект: `git clone https://github.com/Spanther-Team/Spanther.git` или на странице репозитория Code → Download ZIP, потом распакуй.
 2. Открой Xcode, прими лицензию и поставь платформу iOS: Xcode → Settings → Components → iOS → Get. Дождись конца загрузки.
 3. Xcode → Settings → Accounts → «+» → Apple ID. В списке появится команда «Имя (Personal Team)».
 4. Открой `SpantherGaze/SpantherGaze.xcodeproj`. Если Xcode не открывает файл проекта, выполни `brew install xcodegen && cd SpantherGaze && xcodegen generate` (Homebrew: brew.sh) и открой созданный проект.
