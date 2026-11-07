@@ -5,7 +5,7 @@ final class WinkTests: XCTestCase {
     private let fps = 60.0
 
     /// Feeds frames at 60 fps from `t0` up to (not including) `t1` and returns the events.
-    private func run(_ d: inout WinkDetector, _ t0: Double, _ t1: Double,
+    private func run(_ d: inout WinkDetector, _ t0: Double, _ t1: Double, fps: Double = 60,
                      left: (Double) -> Double, right: (Double) -> Double) -> [WinkEvent] {
         var events: [WinkEvent] = []
         let n = Int(((t1 - t0) * fps).rounded())
@@ -44,11 +44,27 @@ final class WinkTests: XCTestCase {
         XCTAssertEqual(events.map(\.side), [.both])
     }
 
-    func testEyesClosingTwoFramesApartAreStillABlink() {
+    func testEyesClosingOneFrameApartAreStillABlink() {
         var d = WinkDetector()
-        let events = run(&d, 0, 2, left: closed(1.0, 1.15), right: closed(1.0 + 2 / fps, 1.15))
+        let events = run(&d, 0, 2, left: closed(1.0, 1.15), right: closed(1.0 + 1 / fps, 1.15))
         XCTAssertEqual(events.map(\.side), [.both])
         XCTAssertEqual(events.first?.onset ?? 0, 1.0, accuracy: 1e-6)
+    }
+
+    func testOtherEyeFollowingTwoFramesLaterIsStillAWink() {
+        // Aziz's left winks on 2026-11-07: the right eye followed 33-50 ms later and reached about 0.8.
+        var d = WinkDetector()
+        let events = run(&d, 0, 2, left: closed(1.0, 1.3, 0.87), right: closed(1.0 + 2 / fps, 1.25, 0.79))
+        XCTAssertEqual(events.map(\.side), [.left])
+        XCTAssertEqual(events.first?.onset ?? 0, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(events.first?.otherPeak ?? 0, 0.79, accuracy: 1e-9)
+    }
+
+    func testAt30FpsTheNextFrameIsStillABlink() {
+        // One frame is 33 ms at 30 fps, so a blink whose eyes cross a few ms apart can land on two frames.
+        var d = WinkDetector()
+        let events = run(&d, 0, 2, fps: 30, left: closed(1.0, 1.2), right: closed(1.0 + 1.0 / 30, 1.2))
+        XCTAssertEqual(events.map(\.side), [.both])
     }
 
     func testOtherEyeClosingLateDoesNotTurnAWinkIntoABlink() {
