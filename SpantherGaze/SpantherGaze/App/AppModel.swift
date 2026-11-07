@@ -485,7 +485,7 @@ final class AppModel: ObservableObject {
             botAim = s.startPoint + Vec2(10, -6)
             botPlayed = []
             if botReadySince == nil { botReadySince = now }
-            if now - (botReadySince ?? now) > 4 {
+            if now - (botReadySince ?? now) > 6 {
                 botReadySince = nil
                 rhythmClosure(WinkEvent(side: .left, onset: now - 0.02, decided: now, otherPeak: 0.2))
             }
