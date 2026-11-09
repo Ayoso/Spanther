@@ -218,15 +218,37 @@ struct LivingBackground: View {
     @State private var cache = GardenCache()
 
     var body: some View {
-        TimelineView(.animation) { _ in
-            let now = CACurrentMediaTime()
-            Canvas { g, size in
-                let garden = cache.garden(for: size, seed: Atlas.gardenSeed)
-                let growth = min(1, max(0, (now - growFrom) / Self.growSec))
-                GardenPainter.draw(&g, garden, time: now, growth: growth)
-            }
+        GeometryReader { geo in
+            // Built here, on the main thread; the canvas gets the finished value.
+            let garden = cache.garden(for: geo.size, seed: Atlas.gardenSeed)
+            GardenLayer(garden: garden, growFrom: growFrom)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// The garden drawn by itself, under whatever the screen draws on top. The garden only sways, so 30 frames a
+/// second are enough, and the canvas is rasterised off the main thread. At 60 fps on the main thread it slowed
+/// the CI simulator a lot (each screenshot took 4 to 9 s instead of 2.6), and on the phone the main thread also
+/// receives every tracking frame.
+struct GardenLayer: View {
+    let garden: Garden
+    var growFrom: Double = 0
+    var distractions: [Distraction] = []
+    /// Track time of host time 0 (`RhythmSession.startHost`), only while the music plays: the distractions follow
+    /// the track.
+    var trackStart: Double?
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            // Read once per frame and captured by the canvas (see RhythmPlayView: read inside, the canvas froze).
+            let now = CACurrentMediaTime()
+            let growth = min(1, max(0, (now - growFrom) / LivingBackground.growSec))
+            let trackTime = trackStart.map { now - $0 }
+            Canvas(rendersAsynchronously: true) { [garden, distractions] g, _ in
+                GardenPainter.draw(&g, garden, time: now, growth: growth, distractions: distractions, trackTime: trackTime)
+            }
+        }
     }
 }

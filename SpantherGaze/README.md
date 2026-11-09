@@ -106,7 +106,7 @@ Every tracked frame now logs ARKit's light estimate (`light_lm`, about 1000 in a
 ## Unverified on device
 
 - Night vision: whether the screen's light is enough for ARKit in a dark room, the accuracy without pupils, and the 120 lm threshold of the "dark" hint.
-- The garden's cost on the frame rate (it is drawn at 60 fps next to the tracking), and whether the distractions are fair for children.
+- The garden's cost on the frame rate, and whether the distractions are fair for children. It is drawn in its own layer at 30 fps and rasterised off the main thread: at 60 fps on the main thread it slowed the CI simulator a lot (a screenshot took 4 to 9 s instead of 2.6), and on the phone the main thread also receives every tracking frame. Check `track fps` in «Отладка» on the menu, the meteors and the rhythm play.
 - The portrait axis mapping in `Transforms.cameraPlaneToPortrait` and the Vision image orientation `.leftMirrored` are best guesses. Calibration absorbs axis mix-ups, but check them in the debug overlay.
 - 60 pt per cm is assumed for cm figures (current iPhones are 60–64).
 - Blink thresholds (0.6 closed, 0.35 open, 50–500 ms) are starting values and need tuning on real faces, children's especially.

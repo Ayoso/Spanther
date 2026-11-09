@@ -171,11 +171,12 @@ struct MenuView: View {
 }
 
 /// The SPANTHER mark: its ring draws itself in after launch, like a gaze being held, and the pupil breathes.
+/// The menu's small animations run at 30 fps, like the garden behind them.
 struct BrandMark: View {
     var since: Double
 
     var body: some View {
-        TimelineView(.animation) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
             let now = CACurrentMediaTime()
             Canvas { g, size in
                 let k = min(1, max(0, (now - since - 0.4) / 1.4))
@@ -192,7 +193,7 @@ struct BrandMark: View {
 /// A meteor on the menu: the dial round it fills while it heats up, it bursts, and the next one begins.
 private struct MeteorVignette: View {
     var body: some View {
-        TimelineView(.animation) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
             let now = CACurrentMediaTime()
             Canvas { g, size in
                 let cycle = 3.2, t = now.truncatingRemainder(dividingBy: cycle)
@@ -236,7 +237,7 @@ private struct MeteorVignette: View {
 /// A rhythm note on the menu: the hand goes round once a beat and the star answers when it reaches the mark.
 private struct NoteVignette: View {
     var body: some View {
-        TimelineView(.animation) { _ in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
             let now = CACurrentMediaTime()
             Canvas { g, size in
                 let beat = 1.2
