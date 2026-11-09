@@ -54,7 +54,7 @@ jobs:
           APP=build/Release-iphoneos/SpantherGaze.app
           lipo -info "$APP/SpantherGaze"
           lipo -info "$APP/SpantherGaze" | grep -q arm64
-          for key in CFBundleIdentifier CFBundleShortVersionString MinimumOSVersion NSCameraUsageDescription; do
+          for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion MinimumOSVersion NSCameraUsageDescription ITSAppUsesNonExemptEncryption; do
             value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$APP/Info.plist")
             echo "$key: $value"
           done
@@ -63,6 +63,12 @@ jobs:
           ICON=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName" "$APP/Info.plist")
           echo "App icon: $ICON"
           test "$ICON" = AppIcon
+          # Version and build come from MARKETING_VERSION and CURRENT_PROJECT_VERSION, never a literal $(...).
+          VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist")
+          case "$VER|$BUILD" in *'$'*|'|'*|*'|') echo "Version not expanded: $VER ($BUILD)"; exit 1;; esac
+          # App Store Connect refuses builds that use required-reason APIs (UserDefaults) without a privacy manifest.
+          grep -q " Payload/SpantherGaze.app/PrivacyInfo.xcprivacy$" ipa-files.txt
           ls -l SpantherGaze-unsigned.ipa
       - uses: actions/upload-artifact@v4
         with:
