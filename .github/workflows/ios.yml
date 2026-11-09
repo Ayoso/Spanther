@@ -100,7 +100,9 @@ jobs:
   # at without a Mac. There is no face tracking in the Simulator, so "eyes" mode uses the bot's gaze.
   simulator-smoke:
     runs-on: macos-15
-    timeout-minutes: 30
+    # Usually about 24 minutes, most of it fixed waits and the iPhone SE simulator's boot. On a slow runner
+    # (main, 9 November) the play step took 16.5 instead of 12.5 minutes and the SE step ran past 30.
+    timeout-minutes: 40
     permissions:
       contents: write
     steps:
