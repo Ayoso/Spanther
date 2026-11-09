@@ -246,6 +246,13 @@ private struct RhythmPlayView: View {
             RhythmResults(session: session)
         } else {
             ZStack(alignment: .topTrailing) {
+                // The garden behind the notes, in a layer of its own at 30 fps; in play its distractions try to
+                // catch the eye.
+                GardenLayer(garden: session.garden, distractions: session.distractions,
+                            trackStart: session.phase == .playing ? session.startHost : nil)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 TimelineView(.animation) { _ in
                     // The time is read here, once per frame, and captured by the canvas. Read inside the canvas
                     // closure, it gave SwiftUI nothing that changed, so the canvas kept its first frame of play.
@@ -314,9 +321,6 @@ private struct RhythmPlayView: View {
         let lit = s.lock.locked
         let light = Self.lightUp(since: s.lock.since, host: host)
         let t = s.trackTime(host: host)
-        // The garden behind everything; in play its distractions try to catch the eye.
-        GardenPainter.draw(&g, s.garden, time: host, distractions: s.distractions,
-                           trackTime: s.phase == .playing ? t : nil)
         if s.phase == .ready {
             drawStart(&g, s, host, light: lit == RhythmSession.startTarget ? light : 0)
             drawReticle(&g, aim, onTarget: lit != nil)
