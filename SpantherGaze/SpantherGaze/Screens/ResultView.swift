@@ -7,16 +7,16 @@ struct ResultView: View {
         // Landscape: the numbers on the left, the buttons on the right, so it fits in 390 pt of height.
         HStack(spacing: 28) {
             VStack(spacing: 14) {
-                Text("Калибровка готова").font(.title2.bold())
+                Text("Калибровка готова").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
                 if let r = app.report {
                     HStack(spacing: 10) {
                         stat(String(format: "%.0f pt", r.meanErrorPt), String(format: "%.2f см · %.1f°", r.meanErrorCm, r.meanErrorDeg), "средний промах")
                         stat(String(format: "%.0f pt", r.jitterPt), String(format: "%.2f см · %.1f°", r.jitterCm, r.jitterDeg), "дрожание")
                     }
-                    Text(verdict(r)).multilineTextAlignment(.center).foregroundStyle(Palette.dim)
+                    Text(verdict(r)).font(Atlas.body).multilineTextAlignment(.center).foregroundStyle(Atlas.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(String(format: "Зона попадания: радиус метеорита + %.0f pt", app.hitMarginPt))
-                        .font(.footnote).foregroundStyle(Palette.dim)
+                        .font(Atlas.caption).foregroundStyle(Atlas.inkSoft)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -24,13 +24,14 @@ struct ResultView: View {
                 Button {
                     if app.afterCalibration == .rhythm { app.openRhythm() } else { app.route = .game }
                 } label: {
-                    Text(app.afterCalibration == .rhythm ? "К ритм-режиму" : "Играть").frame(maxWidth: .infinity)
+                    Text(app.afterCalibration == .rhythm ? "К ритм-режиму" : "Играть")
                 }
-                    .buttonStyle(PrimaryButton())
-                Button { app.beginCalibration(then: app.afterCalibration) } label: { Text("Откалибровать заново").frame(maxWidth: .infinity) }
-                    .buttonStyle(SecondaryButton())
+                    .buttonStyle(AtlasPrimaryButton())
+                Button { app.beginCalibration(then: app.afterCalibration) } label: { Text("Откалибровать заново") }
+                    .buttonStyle(AtlasSecondaryButton())
                 ShareLink(item: app.logURL) { Label("Экспорт CSV", systemImage: "square.and.arrow.up") }
-                    .font(.footnote)
+                    .font(Atlas.caption.weight(.semibold))
+                    .foregroundStyle(Atlas.ink)
             }
             .frame(width: 260)
         }
@@ -41,17 +42,18 @@ struct ResultView: View {
     private func verdict(_ r: AccuracyReport) -> String {
         if r.meanErrorCm <= 1.0 { return "Отлично: цель для взрослого (1,0 см) достигнута." }
         if r.meanErrorCm <= 1.5 { return "Хорошо: в пределах цели для ребёнка (1,5 см)." }
-        return "Неточно. Попробуй откалибровать заново при хорошем свете."
+        return app.nightVision
+            ? "Неточно. Без зрачков в темноте так бывает: поднеси телефон чуть ближе и откалибруй заново."
+            : "Неточно. Попробуй откалибровать заново при хорошем свете."
     }
 
     private func stat(_ big: String, _ small: String, _ label: String) -> some View {
         VStack(spacing: 4) {
-            Text(big).font(.title.bold()).monospacedDigit()
-            Text(small).font(.caption).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(Palette.dim)
+            Text(big).font(Atlas.display(30)).monospacedDigit().foregroundStyle(Atlas.ink)
+            Text(small).font(Atlas.caption).monospacedDigit().foregroundStyle(Atlas.ink)
+            Text(label).font(Atlas.caption).foregroundStyle(Atlas.inkSoft)
         }
         .frame(maxWidth: .infinity)
-        .padding(12)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .atlasPlate(padding: 12)
     }
 }

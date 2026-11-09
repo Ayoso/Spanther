@@ -74,7 +74,7 @@ Menu, «Тест подмигиваний». A click sounds every second and the
 
 ## Rhythm mode
 
-Menu, «Ритм: подмигивай в такт». An original rhythm game drawn as a star atlas on warm paper (light paper also lights the face for the camera). Stars appear to the beat; a dial hand goes round each one and reaches the red mark at 12 o'clock on its beat. The player looks at the star and closes an eye then. Notes hit in a row join into a constellation, and the results screen shows it as a plate.
+Menu, the «Ритм» plate. An original rhythm game drawn as a star atlas on warm paper (light paper also lights the face for the camera). Stars appear to the beat; a dial hand goes round each one and reaches the red mark at 12 o'clock on its beat. The player looks at the star and closes an eye then. Notes hit in a row join into a constellation, and the results screen shows it as a plate.
 
 - Start: «Посмотри на звезду и подмигни». The wink on the start star (or a tap) starts the music 1 s later and gives the aim adapter its first label at the current grip.
 - No visible aim. A cursor that sits a little off the spot the player looks at pulls the eyes after it, and both drift off together. Instead the star the aim is near lights up (a warm wash under it, and the star grows a little) and holds the aim: `GazeLock` in `GazeCore/Lock.swift` locks the nearest star within the level's hit zone, keeps it until the aim is 1.4 zones away, another star in reach is clearly closer, or the aim has been gone for 0.35 s. A wink plays the locked star, even where an earlier note's window holds the wink too. `GazeReplay` replays the lock over a recorded play: on Aziz's of 7 November it was on the note he winked at in 24 of 24 winks, and it changed 54 times over 25 notes, so the light barely flickers. The aim is drawn only with «Отладка» on.
@@ -84,8 +84,29 @@ Menu, «Ритм: подмигивай в такт». An original rhythm game dr
 - Tracks: three CC0 tracks composed for the game by `Tools/compose_tracks.py` («Орбита» 88 BPM, «Звёздная пыль» 104, «Метеоритный дождь» 124, about 1–1.5 min). The script writes the `.m4a` files into `SpantherGaze/Resources` and `tracks.json`: tempo, first beat and an accent list (beat, strength 1–3) from the score, which the notes follow. To use another song, put the file in Resources and give its tempo and first beat in `tracks.json`; without accents the notes follow a fixed pattern on the beats. `RhythmTests.testBundledTracks` checks the bundled tracks.
 - CSV rows: `rhythm_start`, `note_hit` and `note_miss` (judgement, timing offset, aim distance, eye, the locked note), `rhythm_end`, `label` and `rhythm_frame` (with the locked note in `locked`: its index, -1 for the start star).
 
+## Atlas look, living garden and distractions
+
+Every screen but the wink test uses the rhythm mode's star atlas look (`Screens/Atlas.swift`): ink on warm paper, one vermilion for what matters now, serif titles. The menu shows the SPANTHER mark (its hold ring draws itself in at launch), the two games as plates with small animated vignettes, and the switches.
+
+- The meteors: ink-outlined rocks with engraved hatching that warm to vermilion while they burn, a dial round each like a rhythm note's, and Earth as an engraved globe edge. No aim is drawn (only with «Отладка»): the meteor being looked at gets a warm light under it, the way the rhythm mode lights its notes.
+- The living garden (`GazeCore/Garden.swift`, drawn by `Screens/LivingBackground.swift`): lianas hang from the top edge and sway, two branching trees grow from the bottom corners with node dots where they fork, spores drift up, and light pulses run down the lianas. One seed for every screen, so the garden stays put while the screens change in front of it. The lianas in the middle third end above the notes. The look is original; the reference screenshots Aziz sent were for mood only.
+- Distractions (rhythm play only, `DistractionPlan`): a firefly crossing, a flower opening at a liana's tip, a seed spinning down, a surge up a branch, a liana swinging. About every 7.5 s on easy, 4.5 s on normal and 2.8 s on hard; below hard they keep to the margins outside the note area, on hard some cross it. They are the same on every play of a track and level, and each one is a `distraction` CSV row (kind and where it began), so a replay can see whether the gaze went to it.
+- Wink hints: a closure that lands in a note's window but cannot play it says why under the note («одним глазом» for a blink on normal and hard, only when it came on the beat; «левым глазом» / «правым глазом» for the wrong eye on hard). On 7 November Aziz closed both eyes on 15 of 34 closures in an easy play, which counts there and was silently ignored on the other levels. CSV: `note_reject` rows.
+
+## Night vision
+
+Menu switch «Ночное зрение», for a dark room. ARKit's face tracking needs some light (an Apple engineer on the developer forums: it does not work in total darkness), and in a dark room the only light on the face is the screen's. So night vision:
+
+- turns the screen to full brightness on every screen but the menu, and gives the player's brightness back on the menu and when the app leaves the screen;
+- runs the camera at its slowest offered frame rate (30 fps on the iPhone 13) so each frame can be exposed twice as long, and lets the exposure aim one stop brighter (with low light boost where the camera has it);
+- drops the Vision pupils, which are not found in the dark: the model calibrates and plays on `eyes` features. Switching it asks for a new calibration.
+
+Every tracked frame now logs ARKit's light estimate (`light_lm`, about 1000 in a lit room), and `tracking` rows say whether night vision was on (`night`). The calibration screen warns when the face is not found in the dark or the light is low.
+
 ## Unverified on device
 
+- Night vision: whether the screen's light is enough for ARKit in a dark room, the accuracy without pupils, and the 120 lm threshold of the "dark" hint.
+- The garden's cost on the frame rate (it is drawn at 60 fps next to the tracking), and whether the distractions are fair for children.
 - The portrait axis mapping in `Transforms.cameraPlaneToPortrait` and the Vision image orientation `.leftMirrored` are best guesses. Calibration absorbs axis mix-ups, but check them in the debug overlay.
 - 60 pt per cm is assumed for cm figures (current iPhones are 60–64).
 - Blink thresholds (0.6 closed, 0.35 open, 50–500 ms) are starting values and need tuning on real faces, children's especially.

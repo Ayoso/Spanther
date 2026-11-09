@@ -1,95 +1,6 @@
 import QuartzCore
 import SwiftUI
 
-/// The rhythm mode's look: a star atlas printed on warm paper. Ink for everything, one vermilion for what matters
-/// now (the mark the dial hand reaches on the beat, the main button, a perfect hit). Serif (New York) for titles,
-/// numbers and judgements, SF Pro for the small print. Spacing on a 4/8 pt grid. Light on purpose: the bright page
-/// also lights the player's face for the camera.
-enum Atlas {
-    static let paper = Color(red: 0.949, green: 0.925, blue: 0.882)       // F2ECE1
-    static let paperShade = Color(red: 0.906, green: 0.875, blue: 0.820)  // E7DFD1
-    static let ink = Color(red: 0.114, green: 0.141, blue: 0.220)         // 1D2438
-    static let inkSoft = Color(red: 0.361, green: 0.384, blue: 0.459)     // 5C6275
-    static let vermilion = Color(red: 0.761, green: 0.271, blue: 0.176)   // C2452D
-    static let missGrey = Color(red: 0.639, green: 0.612, blue: 0.565)    // A39C90
-    static let onAccent = Color(red: 1.0, green: 0.992, blue: 0.973)      // FFFDF8
-
-    static func display(_ size: CGFloat) -> Font { .system(size: size, weight: .semibold, design: .serif) }
-    static let title = Font.system(size: 22, weight: .semibold, design: .serif)
-    static let body = Font.system(size: 17)
-    static let caption = Font.system(size: 13)
-
-    static func levelName(_ l: RhythmLevel) -> String {
-        switch l {
-        case .easy: return "Лёгкий"
-        case .normal: return "Средний"
-        case .hard: return "Сложный"
-        }
-    }
-
-    static func levelHint(_ l: RhythmLevel) -> String {
-        switch l {
-        case .easy: return "Сильные доли. Можно моргать."
-        case .normal: return "Больше нот, любой глаз."
-        case .hard: return "Слева левый глаз, справа правый."
-        }
-    }
-
-    static func word(_ j: Judgement) -> String {
-        switch j {
-        case .perfect: return "Точно"
-        case .good: return "Хорошо"
-        case .ok: return "Есть"
-        case .miss: return "Мимо"
-        }
-    }
-
-    /// The point `radius` from `c` at `angle` (radians from 3 o'clock, clockwise on screen, where y points down).
-    /// The cosine is taken in Double on purpose: with CGFloat around it, `cos` is ambiguous between the
-    /// CoreGraphics and the Double overloads.
-    static func polar(_ c: CGPoint, _ radius: CGFloat, _ angle: Double) -> CGPoint {
-        let dx: Double = cos(angle), dy: Double = sin(angle)
-        return CGPoint(x: c.x + CGFloat(dx) * radius, y: c.y + CGFloat(dy) * radius)
-    }
-
-    /// A four-pointed star with curved sides, the atlas's mark for a note.
-    static func star(_ c: CGPoint, _ r: CGFloat) -> Path {
-        var p = Path()
-        let tips = (0..<4).map { k in polar(c, r, Double(k) * .pi / 2 - .pi / 2) }
-        p.move(to: tips[0])
-        for k in 0..<4 {
-            let ctrl = polar(c, r * 0.2, Double(k) * .pi / 2 - .pi / 4)
-            p.addQuadCurve(to: tips[(k + 1) % 4], control: ctrl)
-        }
-        p.closeSubpath()
-        return p
-    }
-
-    /// A closed eyelid with three lashes, `w` wide: the eye a side note asks for.
-    static func closedEye(_ c: CGPoint, _ w: CGFloat) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: c.x - w / 2, y: c.y))
-        p.addQuadCurve(to: CGPoint(x: c.x + w / 2, y: c.y), control: CGPoint(x: c.x, y: c.y + w * 0.6))
-        for k: CGFloat in [-1, 0, 1] {
-            let x = c.x + k * w * 0.27, y = c.y + w * 0.3 * (1 - abs(k) * 0.4)
-            p.move(to: CGPoint(x: x, y: y))
-            p.addLine(to: CGPoint(x: x + k * w * 0.1, y: y + w * 0.24))
-        }
-        return p
-    }
-
-    /// Part of a circle from 12 o'clock, clockwise as the player sees it (y down), `fraction` of the way round.
-    static func dial(_ c: CGPoint, _ r: CGFloat, _ fraction: Double) -> Path {
-        var p = Path()
-        let steps = max(2, Int(64 * fraction))
-        for k in 0...steps {
-            let pt = polar(c, r, -Double.pi / 2 + 2 * .pi * fraction * Double(k) / Double(steps))
-            if k == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
-        }
-        return p
-    }
-}
-
 struct RhythmView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -180,6 +91,8 @@ private struct RhythmPicker: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(LivingBackground(growFrom: app.launchTime).ignoresSafeArea())
     }
 
     private func trackRow(_ t: RhythmTrack) -> some View {
@@ -400,12 +313,15 @@ private struct RhythmPlayView: View {
         let aim = app.mode == .eyes && app.showDebug ? app.gazePoint : nil
         let lit = s.lock.locked
         let light = Self.lightUp(since: s.lock.since, host: host)
+        let t = s.trackTime(host: host)
+        // The garden behind everything; in play its distractions try to catch the eye.
+        GardenPainter.draw(&g, s.garden, time: host, distractions: s.distractions,
+                           trackTime: s.phase == .playing ? t : nil)
         if s.phase == .ready {
             drawStart(&g, s, host, light: lit == RhythmSession.startTarget ? light : 0)
             drawReticle(&g, aim, onTarget: lit != nil)
             return
         }
-        let t = s.trackTime(host: host)
         let lead = s.level.leadSec
         let r = noteRadius(s.level), dialR = r + 12
         let next = s.nextOpen(after: t)
@@ -462,12 +378,34 @@ private struct RhythmPlayView: View {
             }
         }
 
+        drawRejections(&g, s, t, dialR: dialR)
+
         if let first = s.notes.first, t < first.time - lead {
             g.draw(Text("Слушай ритм").font(Atlas.title).foregroundColor(Atlas.inkSoft),
                    at: CGPoint(x: size.width / 2, y: size.height / 2))
         }
         drawHUD(&g, s, t, size)
         drawReticle(&g, aim, onTarget: lit != nil)
+    }
+
+    /// Why a closure in a note's window did not play it, under that note for 0.9 s: the eye a side note needs, or
+    /// "one eye" for a blink on a level that needs a wink. A blink is only answered when it came on the beat, so an
+    /// ordinary blink between notes does not set off a hint.
+    private func drawRejections(_ g: inout GraphicsContext, _ s: RhythmSession, _ t: Double, dialR: CGFloat) {
+        for r in s.rejections {
+            let age = t - r.time
+            guard age >= 0, age < 0.9, r.index < s.points.count, r.reason == .wrongEye || r.onBeat else { continue }
+            let text: String
+            switch r.reason {
+            case .blink: text = "одним глазом"
+            case .wrongEye: text = s.notes[r.index].side == .left ? "левым глазом" : "правым глазом"
+            }
+            var gg = g
+            gg.opacity = age < 0.6 ? 1 : 1 - (age - 0.6) / 0.3
+            let p = cg(s.points[r.index])
+            gg.draw(Text(text).font(.system(size: 15, weight: .semibold, design: .serif)).foregroundColor(Atlas.vermilion),
+                    at: CGPoint(x: p.x, y: p.y + dialR + 16 + 6 * CGFloat(age)))
+        }
     }
 
     /// How far the light on a locked target is up, 0 to 1: it opens over 0.12 s from the moment of the lock.
@@ -641,6 +579,8 @@ private struct RhythmResults: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(LivingBackground(growFrom: app.launchTime).ignoresSafeArea())
     }
 
     /// What the numbers say, in a sentence each.
@@ -697,30 +637,5 @@ private struct ConstellationPlate: View {
         }
         .background(Atlas.paperShade, in: RoundedRectangle(cornerRadius: 12))
         .accessibilityLabel("Созвездие этой игры")
-    }
-}
-
-// MARK: - Buttons
-
-struct AtlasPrimaryButton: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(Atlas.onAccent)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(Atlas.vermilion.opacity(!enabled ? 0.4 : configuration.isPressed ? 0.8 : 1),
-                        in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-struct AtlasSecondaryButton: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(Atlas.ink.opacity(configuration.isPressed ? 0.6 : 1))
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Atlas.ink.opacity(0.25), lineWidth: 1))
     }
 }

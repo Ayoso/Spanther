@@ -36,6 +36,23 @@ final class RhythmSession: ObservableObject {
     /// instead of drawing the aim, and a wink plays the locked note.
     private(set) var lock = GazeLock()
     static let startTarget = -1
+    /// The garden behind the play (the same one as on the other screens) and the distractions of this track and
+    /// level: the same on every play, like the notes.
+    let garden: Garden
+    let distractions: [Distraction]
+    private var nextDistraction = 0
+
+    /// An eye closure that landed in a note's window but could not play it, for the hint at that note.
+    struct Rejection {
+        var index: Int
+        var reason: RhythmJudge.Rejected.Reason
+        /// Track time of the closure.
+        var time: Double
+        /// Within the good window of the note: it looks like an attempt to play it, not a stray blink.
+        var onBeat: Bool
+    }
+
+    private(set) var rejections: [Rejection] = []
 
     private var player: AVAudioPlayer?
 
@@ -51,6 +68,9 @@ final class RhythmSession: ObservableObject {
         startPoint = Transforms.playAreaToScreen(x: 0.5, y: 0.52, size: screen)
         judge = RhythmJudge(notes: notes, rules: .level(level, measuredErrorPt: measuredErrorPt ?? 60), latencySec: latencySec)
         judgedAt = Array(repeating: nil, count: notes.count)
+        garden = Garden(size: screen, seed: Atlas.gardenSeed)
+        distractions = DistractionPlan.make(level: level, garden: garden, from: 0, to: max(0, track.endSec - 1),
+                                            seed: DistractionPlan.seed(track.id + "/" + level.rawValue))
     }
 
     /// Track time of a host time; -infinity before the music is scheduled.
@@ -116,10 +136,26 @@ final class RhythmSession: ObservableObject {
         guard phase == .playing else { return nil }
         let t = trackTime(host: host)
         let pts = points
+        let before = judge.lastRejected
         let hit = judge.closure(side: side, time: t, aimDistance: { i in i == locked ? 0 : aim.map { $0.distance(to: pts[i]) } },
                                 prefer: locked)
         if let h = hit { judgedAt[h.index] = t }
+        if hit == nil, let r = judge.lastRejected, r != before {
+            rejections.append(Rejection(index: r.index, reason: r.reason, time: r.time, onBeat: r.distanceSec <= judge.rules.goodSec))
+            if rejections.count > 8 { rejections.removeFirst() }
+        }
         return hit
+    }
+
+    /// The distractions that began since the last call, up to `host`, for the CSV.
+    func takeStartedDistractions(host: Double) -> [Distraction] {
+        let t = trackTime(host: host)
+        var out: [Distraction] = []
+        while nextDistraction < distractions.count, distractions[nextDistraction].start <= t {
+            out.append(distractions[nextDistraction])
+            nextDistraction += 1
+        }
+        return out
     }
 
     /// Marks the notes whose window has passed as missed and ends the play when the music is over. Returns the
