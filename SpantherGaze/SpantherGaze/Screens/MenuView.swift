@@ -124,6 +124,9 @@ struct MenuView: View {
         }
     }
 
+    static let privacyPolicyURL = URL(string:
+        "https://doc-hosting.flycricket.io/spanther-privacy-policy/117739f5-0c00-4d4e-ac2e-ec17666ddb66/privacy")!
+
     private var settings: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Настройки")
@@ -150,6 +153,11 @@ struct MenuView: View {
                 .font(Atlas.caption)
                 .foregroundStyle(Atlas.inkSoft)
                 .fixedSize(horizontal: false, vertical: true)
+            // App Review 5.1.1: the privacy policy must be reachable inside the app, not only on the store page.
+            Link("Политика конфиденциальности", destination: Self.privacyPolicyURL)
+                .font(Atlas.caption.weight(.semibold))
+                .foregroundStyle(Atlas.ink)
+                .frame(minHeight: 44, alignment: .leading)
         }
         .atlasPlate(padding: 12)
     }
