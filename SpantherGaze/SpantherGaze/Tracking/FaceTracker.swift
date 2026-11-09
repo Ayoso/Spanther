@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import QuartzCore
 
 /// One ARKit frame turned into GazeCore types, plus timing for the debug overlay.
@@ -10,6 +11,8 @@ struct TrackingSample {
     var blink: (left: Double, right: Double)?
     var processingMs: Double
     var fps: Double
+    /// The light ARKit estimates around the face (lumens, about 1000 in a lit room). nil when no face.
+    var light: Double? = nil
 }
 
 /// The camera format ARKit runs and the device state that can lower its frame rate, for the debug overlay and
@@ -28,6 +31,8 @@ struct TrackingInfo: Equatable {
     /// The image orientation Vision runs with, for example "downMirrored"; "turned" when the tracker turned it 180°
     /// because Vision found no face with the expected one.
     var vision = "-"
+    /// Night vision is on: slowest frame rate, brighter exposure, no Vision pupils.
+    var night = false
 }
 
 /// ARKit face tracking adapter (the `Tracking` module in CLAUDE.md). All ARKit work runs on `queue`;
@@ -50,6 +55,8 @@ final class FaceTracker: NSObject, ARSessionDelegate {
     private var visionBusy = false
     /// Guarded by `lock`. Set on the main thread in `start`, read on `queue`.
     private var orientation = ScreenOrientation.landscapeRight
+    /// Guarded by `lock`. Night vision: no Vision pupils (they are not found in the dark).
+    private var nightVision = false
     /// Guarded by `lock`. The landscape image orientations are not yet checked on a phone, so Vision's results are
     /// counted in windows of 30 requests (about 1 s): almost no face in a window turns the image 180°, a mostly
     /// successful window keeps the orientation for good.
@@ -62,21 +69,31 @@ final class FaceTracker: NSObject, ARSessionDelegate {
     private var fpsFrames = 0
     private var fps = 0.0
 
-    /// Main thread. `orientation` is how the app's screen is held; it has to match Info.plist.
-    func start(orientation: ScreenOrientation) {
+    /// Main thread. `orientation` is how the app's screen is held; it has to match Info.plist. `night`: night
+    /// vision (see `setNightVision`).
+    func start(orientation: ScreenOrientation, night: Bool = false) {
         guard Self.isSupported else { return }
-        lock.lock(); self.orientation = orientation; let vision = visionDescriptionLocked; lock.unlock()
+        lock.lock()
+        self.orientation = orientation
+        nightVision = night
+        if night { latestPupils = nil }
+        let vision = visionDescriptionLocked
+        lock.unlock()
         info.screen = orientation.rawValue
-        info.vision = vision
+        info.vision = night ? "off (night)" : vision
+        info.night = night
         let config = ARFaceTrackingConfiguration()
         config.maximumNumberOfTrackedFaces = 1
-        config.isLightEstimationEnabled = false
+        // The light estimate is logged on every frame, so a session played in the dark can be told apart.
+        config.isLightEstimationEnabled = true
         // CLAUDE.md asks for 60 fps. ARKit lists formats best first, and `max` keeps the first of the fastest,
-        // so this is the best format at the highest frame rate the device offers.
+        // so this is the best format at the highest frame rate the device offers. Night vision takes the first of
+        // the slowest instead (30 fps on the iPhone 13): a frame can then be exposed twice as long, and in a dark
+        // room the light from the screen is all the camera gets.
         let formats = ARFaceTrackingConfiguration.supportedVideoFormats
-        if let fastest = formats.max(by: { $0.framesPerSecond < $1.framesPerSecond }) {
-            config.videoFormat = fastest
-        }
+        let chosen = night ? formats.min(by: { $0.framesPerSecond < $1.framesPerSecond })
+            : formats.max(by: { $0.framesPerSecond < $1.framesPerSecond })
+        if let chosen { config.videoFormat = chosen }
         info.offered = formats.isEmpty ? "-" : formats.map { Self.describe($0) }.joined(separator: " ")
         info.format = Self.describe(config.videoFormat)
         let center = NotificationCenter.default
@@ -89,6 +106,28 @@ final class FaceTracker: NSObject, ARSessionDelegate {
         session.delegateQueue = queue
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        configureCamera(night: night)
+    }
+
+    /// Night vision on or off: the session restarts with the other frame rate. Main thread.
+    func setNightVision(_ on: Bool) {
+        lock.lock(); let o = orientation; lock.unlock()
+        start(orientation: o, night: on)
+    }
+
+    /// Night vision lets the camera's auto exposure aim one stop brighter and use low light boost where the camera
+    /// has it (ARKit 6 hands out the capture device for this). Off puts both back.
+    private func configureCamera(night: Bool) {
+        guard let device = ARFaceTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isLowLightBoostSupported { device.automaticallyEnablesLowLightBoostWhenAvailable = night }
+            let bias: Float = night ? min(1, device.maxExposureTargetBias) : 0
+            device.setExposureTargetBias(max(device.minExposureTargetBias, bias), completionHandler: nil)
+            device.unlockForConfiguration()
+        } catch {
+            // The camera keeps ARKit's own exposure.
+        }
     }
 
     func stop() { session.pause() }
@@ -162,9 +201,12 @@ final class FaceTracker: NSObject, ARSessionDelegate {
             return
         }
 
-        // Pupils: every second frame, never more than one Vision request in flight.
+        // Pupils: every second frame, never more than one Vision request in flight. Not in night vision.
         frameCount += 1
-        if let detector = pupilDetector, frameCount % 2 == 0 {
+        lock.lock()
+        let night = nightVision
+        lock.unlock()
+        if let detector = pupilDetector, !night, frameCount % 2 == 0 {
             lock.lock()
             let busy = visionBusy
             if !busy { visionBusy = true }
@@ -215,7 +257,8 @@ final class FaceTracker: NSObject, ARSessionDelegate {
         let blink = (left: face.blendShapes[.eyeBlinkLeft]?.doubleValue ?? 0,
                      right: face.blendShapes[.eyeBlinkRight]?.doubleValue ?? 0)
         deliver(TrackingSample(timestamp: frame.timestamp, features: features, blink: blink,
-                               processingMs: (CACurrentMediaTime() - t0) * 1000, fps: fps))
+                               processingMs: (CACurrentMediaTime() - t0) * 1000, fps: fps,
+                               light: frame.lightEstimate.map { Double($0.ambientIntensity) }))
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {

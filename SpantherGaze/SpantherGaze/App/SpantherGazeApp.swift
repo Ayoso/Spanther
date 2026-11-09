@@ -3,13 +3,13 @@ import SwiftUI
 @main
 struct SpantherGazeApp: App {
     @StateObject private var app = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(app)
                 .environmentObject(app.status)
-                .preferredColorScheme(.dark)
                 .statusBarHidden()
                 .persistentSystemOverlays(.hidden)
                 .onAppear {
@@ -17,6 +17,7 @@ struct SpantherGazeApp: App {
                     UIApplication.shared.isIdleTimerDisabled = true
                 }
         }
+        .onChange(of: scenePhase) { phase in app.scenePhaseChanged(active: phase == .active) }
     }
 }
 
@@ -25,7 +26,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            Palette.space.ignoresSafeArea()
+            background
             switch app.route {
             case .menu: MenuView()
             case .calibration: CalibrationView(kind: .calibration)
@@ -37,9 +38,29 @@ struct RootView: View {
             }
             if app.showDebug { DebugOverlay().allowsHitTesting(false) }
         }
+        // Ink on paper everywhere but the wink test, which keeps the old dark look.
+        .preferredColorScheme(app.route == .winkTest ? .dark : .light)
+    }
+
+    /// Paper with the living garden behind the menu, the meteors and the calibration result; plain paper where
+    /// the eyes must not wander (calibration, check) or where the screen draws its own garden (rhythm).
+    @ViewBuilder private var background: some View {
+        switch app.route {
+        case .winkTest:
+            Palette.space.ignoresSafeArea()
+        case .calibration, .check, .rhythm:
+            Atlas.paper.ignoresSafeArea()
+        case .menu, .result, .game:
+            ZStack {
+                Atlas.paper
+                LivingBackground(growFrom: app.launchTime)
+            }
+            .ignoresSafeArea()
+        }
     }
 }
 
+/// The old dark palette, still used by the wink test and the debug overlay.
 enum Palette {
     static let space = Color(red: 0.027, green: 0.043, blue: 0.11)
     static let panel = Color(red: 0.067, green: 0.10, blue: 0.23)

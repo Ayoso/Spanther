@@ -285,7 +285,26 @@ public struct RhythmJudge: Sendable {
     public private(set) var wrongEye = 0
     public private(set) var stray = 0
     public private(set) var offTarget = 0
+    /// The last closure that landed in a note's window but could not play it, so the screen can say why at that
+    /// note: a blink on a level that needs one eye, or the wrong eye on a side note.
+    public private(set) var lastRejected: Rejected?
     private var first = 0
+
+    public struct Rejected: Equatable, Sendable {
+        public enum Reason: String, Sendable {
+            /// Both eyes closed where the note needs one.
+            case blink
+            /// The other eye than the note asks for.
+            case wrongEye
+        }
+
+        public var index: Int
+        public var reason: Reason
+        /// Track time of the closure.
+        public var time: Double
+        /// How far the closure was from the note's expected time (s).
+        public var distanceSec: Double
+    }
 
     public init(notes: [RhythmNote], rules: RhythmRules, latencySec: Double = 0.08) {
         self.notes = notes
@@ -308,15 +327,21 @@ public struct RhythmJudge: Sendable {
         // The open notes whose window holds the closure and whose eye matches: the preferred one, or the earliest.
         var sawWrongEye = false
         var pick: Int?
+        // The note a rejected closure was meant for: the preferred one, or the earliest in the window.
+        var rejected: Int?
         while i < notes.count, expected(i) <= time + rules.okSec {
             defer { i += 1 }
             guard results[i] == nil else { continue }
             let n = notes[i]
             if side == .both {
                 // A two-eye closure is an ordinary blink unless the level takes it.
-                guard n.side == .any, rules.acceptBlink else { continue }
+                guard n.side == .any, rules.acceptBlink else {
+                    if rejected == nil || i == prefer { rejected = i }
+                    continue
+                }
             } else if n.side != .any, n.side.rawValue != side.rawValue {
                 sawWrongEye = true
+                if rejected == nil || i == prefer { rejected = i }
                 continue
             }
             if pick == nil || i == prefer { pick = i }
@@ -324,6 +349,10 @@ public struct RhythmJudge: Sendable {
         }
         guard let k = pick else {
             if sawWrongEye { wrongEye += 1 } else if side != .both { stray += 1 }
+            if let r = rejected {
+                lastRejected = Rejected(index: r, reason: side == .both ? .blink : .wrongEye, time: time,
+                                        distanceSec: abs(time - expected(r)))
+            }
             return nil
         }
         let offset = time - notes[k].time

@@ -205,6 +205,31 @@ final class RhythmTests: XCTestCase {
         XCTAssertEqual(normal.wrongEye + normal.stray, 0, "an ordinary blink is not held against the player")
         var easy = RhythmJudge(notes: notes([1]), rules: .level(.easy, measuredErrorPt: 40), latencySec: 0)
         XCTAssertEqual(easy.closure(side: .both, time: 1.0, aimDistance: { _ in 0 })?.judgement, .perfect)
+        XCTAssertNil(easy.lastRejected)
+    }
+
+    /// A closure that lands in a note's window but cannot play it says why, at the note it was meant for, so the
+    /// screen can show the reason instead of nothing happening.
+    func testRejectedClosuresSayWhy() {
+        var normal = RhythmJudge(notes: notes([1, 2]), rules: .level(.normal, measuredErrorPt: 40), latencySec: 0)
+        XCTAssertNil(normal.closure(side: .both, time: 1.05, aimDistance: { _ in 0 }))
+        XCTAssertEqual(normal.lastRejected?.index, 0)
+        XCTAssertEqual(normal.lastRejected?.reason, .blink)
+        XCTAssertEqual(normal.lastRejected?.distanceSec ?? -1, 0.05, accuracy: 1e-9)
+        // A blink far from every window is not about any note.
+        XCTAssertNil(normal.closure(side: .both, time: 1.5, aimDistance: { _ in 0 }))
+        XCTAssertEqual(normal.lastRejected?.time, 1.05)
+
+        var hard = RhythmJudge(notes: [RhythmNote(time: 1, x: 0.2, y: 0.5, side: .left),
+                                       RhythmNote(time: 1.3, x: 0.8, y: 0.5, side: .right)],
+                               rules: .level(.hard, measuredErrorPt: 40), latencySec: 0)
+        // Left eye at 1.35: only the right note's window holds it.
+        XCTAssertNil(hard.closure(side: .left, time: 1.35, aimDistance: { _ in 0 }, prefer: 1))
+        XCTAssertEqual(hard.lastRejected?.index, 1)
+        XCTAssertEqual(hard.lastRejected?.reason, .wrongEye)
+        XCTAssertEqual(hard.lastRejected?.distanceSec ?? -1, 0.05, accuracy: 1e-9)
+        XCTAssertEqual(hard.wrongEye, 1)
+        XCTAssertEqual(hard.results, [nil, nil])
     }
 
     func testLevelRulesGrowWithTheMeasuredError() {

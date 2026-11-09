@@ -19,7 +19,10 @@ final class GameHUD: ObservableObject {
     @Published var reloadCount = 0
 }
 
-/// Draws GameModel. Model space is screen pt with y down; SpriteKit is y up, so `sk(_:)` flips.
+/// Draws GameModel in the atlas look: ink on paper, over the living garden (the scene is transparent and
+/// GameView puts it on top of RootView's background). No aim is drawn, as in the rhythm mode: the meteor being
+/// looked at gets a warm light under it and its dial fills. Model space is screen pt with y down; SpriteKit is
+/// y up, so `sk(_:)` flips.
 final class GameScene: SKScene {
     var gazeSource: () -> GazeInput = { .notLooking }
     var useTouch = false
@@ -38,13 +41,15 @@ final class GameScene: SKScene {
     var onLookedAt: ((Vec2?) -> Void)?
     let hud = GameHUD()
     var paused_ = false
+    /// Draw the aim (debugging only): a cursor a little off where the player looks pulls the eyes after it.
+    var showAim = false
 
     private(set) var model: GameModel?
     private let world = SKNode()
     private var rocks: [Int: RockNode] = [:]
     private let reticle = SKShapeNode(circleOfRadius: 14)
-    private static let reticleColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.7)
-    private static let reticleStarvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.85)
+    private static let reticleColor = Atlas.UI.ink.withAlphaComponent(0.7)
+    private static let reticleStarvedColor = Atlas.UI.vermilion
     private var reticleStarved = false
     private var touchPoint: Vec2?
     private var lastTime: TimeInterval = 0
@@ -61,7 +66,9 @@ final class GameScene: SKScene {
     #endif
 
     override func didMove(to view: SKView) {
-        backgroundColor = UIColor(red: 0.027, green: 0.043, blue: 0.11, alpha: 1)
+        // The paper and the garden behind are SwiftUI's (RootView); the scene draws only the game over them.
+        backgroundColor = .clear
+        view.allowsTransparency = true
         // SpriteView may present the scene again when SwiftUI rebuilds the view; keep the running game.
         guard world.parent == nil else { return }
         addChild(world)
@@ -73,9 +80,8 @@ final class GameScene: SKScene {
         rocks.removeAll()
         let m = GameModel(config: config, screen: Vec2(size.width, size.height), marginPt: marginPt)
         model = m
-        addStars()
-        // Earth: only the cap that shows above the bottom edge. In landscape the whole circle would be about
-        // 3,100 pt across.
+        // Earth: only the cap that shows above the bottom edge, engraved like a globe on an old chart. In landscape
+        // the whole circle would be about 3,100 pt across.
         let cap = CGMutablePath()
         let steps = 64
         for i in 0...steps {
@@ -87,19 +93,42 @@ final class GameScene: SKScene {
         cap.addLine(to: CGPoint(x: -20, y: -20))
         cap.closeSubpath()
         let earth = SKShapeNode(path: cap)
-        earth.fillColor = UIColor(red: 0.18, green: 0.45, blue: 0.95, alpha: 1)
-        earth.strokeColor = UIColor(red: 0.55, green: 0.75, blue: 1, alpha: 0.6)
-        earth.lineWidth = 8
-        earth.glowWidth = 6
+        earth.fillColor = Atlas.UI.paperShade
+        earth.strokeColor = Atlas.UI.ink.withAlphaComponent(0.75)
+        earth.lineWidth = 1.5
         earth.name = "earth"
         world.addChild(earth)
+        // Parallels under the surface and short meridian ticks, in fine ink.
+        for depth in [14.0, 32.0] {
+            let line = CGMutablePath()
+            for i in 0...steps {
+                let x = -20 + (Double(size.width) + 40) * Double(i) / Double(steps)
+                let p = sk(Vec2(x, m.earthSurfaceY(atX: x) + depth))
+                if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
+            }
+            let n = SKShapeNode(path: line)
+            n.strokeColor = Atlas.UI.ink.withAlphaComponent(depth < 20 ? 0.22 : 0.14)
+            n.lineWidth = 0.8
+            earth.addChild(n)
+        }
+        let ticks = CGMutablePath()
+        for i in 0..<14 {
+            let x = Double(size.width) * (Double(i) + 0.5) / 14
+            ticks.move(to: sk(Vec2(x, m.earthSurfaceY(atX: x) + 3)))
+            ticks.addLine(to: sk(Vec2(x, m.earthSurfaceY(atX: x) + 10)))
+        }
+        let tickNode = SKShapeNode(path: ticks)
+        tickNode.strokeColor = Atlas.UI.ink.withAlphaComponent(0.3)
+        tickNode.lineWidth = 0.8
+        earth.addChild(tickNode)
         for i in 0..<7 {  // continents along the arc, tilted with it
             let x = Double(size.width) * (Double(i) + 0.5) / 7
             let slope = (x - m.earthCenter.x) / max(1, (m.earthRadius * m.earthRadius - pow(x - m.earthCenter.x, 2)).squareRoot())
-            let c = SKShapeNode(ellipseOf: CGSize(width: 50 + 30 * Double(i % 3), height: 14))
-            c.fillColor = UIColor(red: 0.25, green: 0.68, blue: 0.42, alpha: 1)
-            c.strokeColor = .clear
-            c.position = sk(Vec2(x + 12 * Double(i % 2), m.earthSurfaceY(atX: x) + 16 + 6 * Double(i % 2)))
+            let c = SKShapeNode(ellipseOf: CGSize(width: 50 + 30 * Double(i % 3), height: 12))
+            c.fillColor = UIColor(red: 0.235, green: 0.478, blue: 0.420, alpha: 0.28)
+            c.strokeColor = Atlas.UI.ink.withAlphaComponent(0.35)
+            c.lineWidth = 0.8
+            c.position = sk(Vec2(x + 12 * Double(i % 2), m.earthSurfaceY(atX: x) + 20 + 6 * Double(i % 2)))
             c.zRotation = CGFloat(-atan(slope))
             earth.addChild(c)
         }
@@ -133,23 +162,11 @@ final class GameScene: SKScene {
         onGameEvent?("reload", m.energy, m.level)
         let wave = SKShapeNode(circleOfRadius: 30)
         wave.position = CGPoint(x: size.width / 2, y: size.height - 120)
-        wave.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 1)
-        wave.lineWidth = 6
-        wave.glowWidth = 8
+        wave.strokeColor = Atlas.UI.ink.withAlphaComponent(0.6)
+        wave.lineWidth = 2
         wave.zPosition = 60
         world.addChild(wave)
         wave.run(.sequence([.group([.scale(to: 9, duration: 0.6), .fadeOut(withDuration: 0.6)]), .removeFromParent()]))
-    }
-
-    private func addStars() {
-        for _ in 0..<Int(size.width * size.height / 2600) {
-            let s = SKShapeNode(circleOfRadius: CGFloat.random(in: 0.4...1.3))
-            s.fillColor = .white
-            s.strokeColor = .clear
-            s.alpha = CGFloat.random(in: 0.3...0.9)
-            s.position = CGPoint(x: CGFloat.random(in: 0...size.width), y: CGFloat.random(in: 0...size.height))
-            world.addChild(s)
-        }
     }
 
     private func sk(_ p: Vec2) -> CGPoint { CGPoint(x: p.x, y: size.height - p.y) }
@@ -216,7 +233,7 @@ final class GameScene: SKScene {
         if !useTouch, botGaze == nil { onLookedAt?(m.asteroids.first { $0.isTargeted }?.position) }
         if hud.needsReload != m.needsReload { hud.needsReload = m.needsReload }
 
-        if case .point(let p) = gaze {
+        if showAim, case .point(let p) = gaze {
             reticle.isHidden = false
             reticle.position = sk(p)
             let r = useTouch ? 14 : max(10, marginPt * 0.5)
@@ -267,31 +284,56 @@ final class GameScene: SKScene {
         }
     }
 
+    /// A burnt meteor bursts like a star on the chart: an ink ring and a vermilion one, and small four-pointed
+    /// stars thrown out.
     private func explode(at p: CGPoint, radius: CGFloat) {
         boomHaptic.impactOccurred()
-        let ring = SKShapeNode(circleOfRadius: radius)
-        ring.position = p
-        ring.strokeColor = UIColor(red: 1, green: 0.8, blue: 0.5, alpha: 1)
-        ring.lineWidth = 4
-        world.addChild(ring)
-        ring.run(.sequence([.group([.scale(to: 2.6, duration: 0.45), .fadeOut(withDuration: 0.45)]), .removeFromParent()]))
-        for _ in 0..<(20 + Int(radius / 3)) {
-            let q = SKShapeNode(circleOfRadius: CGFloat.random(in: 1.5...max(2, radius * 0.1)))
+        for (k, color) in [Atlas.UI.vermilion, Atlas.UI.ink].enumerated() {
+            let ring = SKShapeNode(circleOfRadius: radius)
+            ring.position = p
+            ring.strokeColor = color
+            ring.lineWidth = k == 0 ? 2.5 : 1
+            world.addChild(ring)
+            let grow: CGFloat = k == 0 ? 2.2 : 2.8
+            ring.run(.sequence([.group([.scale(to: grow, duration: 0.5), .fadeOut(withDuration: 0.5)]), .removeFromParent()]))
+        }
+        for i in 0..<(10 + Int(radius / 5)) {
+            let q = SKShapeNode(path: Self.starPath(CGFloat.random(in: 2.5...max(3, radius * 0.16))))
             q.position = p
-            q.fillColor = Bool.random() ? UIColor(red: 1, green: 0.75, blue: 0.35, alpha: 1) : UIColor(red: 0.55, green: 0.43, blue: 0.35, alpha: 1)
+            q.fillColor = i % 3 == 0 ? Atlas.UI.vermilion : Atlas.UI.ink
             q.strokeColor = .clear
             world.addChild(q)
-            let a = CGFloat.random(in: 0...(2 * .pi)), d = CGFloat.random(in: 0.6...2.2) * radius
-            q.run(.sequence([.group([.moveBy(x: cos(a) * d, y: sin(a) * d, duration: 0.7), .fadeOut(withDuration: 0.7)]), .removeFromParent()]))
+            let a = CGFloat.random(in: 0...(2 * .pi)), d = CGFloat.random(in: 0.7...2.2) * radius
+            q.run(.sequence([.group([.moveBy(x: cos(a) * d, y: sin(a) * d, duration: 0.7),
+                                     .rotate(byAngle: CGFloat.random(in: -2...2), duration: 0.7),
+                                     .fadeOut(withDuration: 0.7)]), .removeFromParent()]))
         }
+    }
+
+    /// The atlas's four-pointed star (Atlas.star) as a CGPath around the origin.
+    static func starPath(_ r: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        func pt(_ radius: CGFloat, _ angle: Double) -> CGPoint {
+            let dx: Double = cos(angle), dy: Double = sin(angle)
+            return CGPoint(x: CGFloat(dx) * radius, y: CGFloat(dy) * radius)
+        }
+        path.move(to: pt(r, Double.pi / 2))
+        for k in 0..<4 {
+            let tip = pt(r, Double.pi / 2 + Double(k + 1) * Double.pi / 2)
+            let ctrl = pt(r * 0.2, Double.pi / 2 + Double(k) * Double.pi / 2 + Double.pi / 4)
+            path.addQuadCurve(to: tip, control: ctrl)
+        }
+        path.closeSubpath()
+        return path
     }
 
     private func impact(at p: CGPoint, radius: CGFloat) {
         hitHaptic.notificationOccurred(.error)
         let flash = SKShapeNode(circleOfRadius: radius * 1.4)
         flash.position = p
-        flash.fillColor = UIColor(red: 1, green: 0.35, blue: 0.2, alpha: 0.8)
-        flash.strokeColor = .clear
+        flash.fillColor = Atlas.UI.vermilion.withAlphaComponent(0.45)
+        flash.strokeColor = Atlas.UI.vermilion
+        flash.lineWidth = 1.5
         world.addChild(flash)
         flash.run(.sequence([.group([.scale(to: 2, duration: 0.5), .fadeOut(withDuration: 0.5)]), .removeFromParent()]))
         let s: CGFloat = 10
@@ -310,13 +352,23 @@ final class GameScene: SKScene {
     }
 }
 
-/// One asteroid: rocky body that heats up, a progress ring, cracks from 50%.
+/// One meteor in the atlas look: an ink-outlined rock with engraved hatching that warms to vermilion as it burns,
+/// a dial round it like a rhythm note's (a faint full circle, the ink arc of the burn, a vermilion mark at the
+/// top), and a warm light under it while it is looked at, which stands in for the hidden aim. Cracks of paper show
+/// from half way. Looked at without energy: a dashed vermilion ring that says "reload first".
 final class RockNode: SKNode {
     private let body: SKShapeNode
+    private let hatch = SKShapeNode()
     private let ring = SKShapeNode()
     private let track: SKShapeNode
+    private let starvedRing: SKShapeNode
+    private let mark = SKShapeNode()
+    private let lamp: SKShapeNode
     private let cracks = SKShapeNode()
     private let radius: CGFloat
+
+    private static let paperRGB: (CGFloat, CGFloat, CGFloat) = (0.906, 0.875, 0.820)
+    private static let hotRGB: (CGFloat, CGFloat, CGFloat) = (0.761, 0.271, 0.176)
 
     init(_ a: Asteroid) {
         let radius = CGFloat(a.radius)
@@ -331,16 +383,45 @@ final class RockNode: SKNode {
         }
         path.closeSubpath()
         body = SKShapeNode(path: path)
-        body.strokeColor = .clear
+        body.strokeColor = Atlas.UI.ink.withAlphaComponent(0.9)
+        body.lineWidth = 1.6
         track = SKShapeNode(circleOfRadius: radius + 10)
+        starvedRing = SKShapeNode(path: CGPath(ellipseIn: CGRect(x: -radius - 10, y: -radius - 10, width: 2 * radius + 20,
+                                                                height: 2 * radius + 20), transform: nil)
+            .copy(dashingWithPhase: 0, lengths: [5, 5]))
+        lamp = SKShapeNode(circleOfRadius: radius + 18)
         super.init()
-        track.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.18)
-        track.lineWidth = 6
+        lamp.fillColor = Atlas.UI.vermilion.withAlphaComponent(0.13)
+        lamp.strokeColor = .clear
+        lamp.isHidden = true
+        track.strokeColor = Atlas.UI.ink.withAlphaComponent(0.14)
+        track.lineWidth = 1.5
         track.isHidden = true
-        ring.strokeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 1)
-        ring.lineWidth = 6
+        starvedRing.strokeColor = Atlas.UI.vermilion
+        starvedRing.lineWidth = 2
+        starvedRing.isHidden = true
+        ring.strokeColor = Atlas.UI.ink
+        ring.lineWidth = 2.5
         ring.lineCap = .round
-        ring.glowWidth = 3
+        let mp = CGMutablePath()
+        mp.move(to: CGPoint(x: 0, y: radius + 4))
+        mp.addLine(to: CGPoint(x: 0, y: radius + 16))
+        mark.path = mp
+        mark.strokeColor = Atlas.UI.vermilion
+        mark.lineWidth = 3
+        mark.lineCap = .round
+        mark.isHidden = true
+        // Engraved hatching: short parallel strokes on one side of the rock.
+        let hp = CGMutablePath()
+        for i in 0..<4 {
+            let x = -radius * 0.5 + CGFloat(i) * radius * 0.22
+            hp.move(to: CGPoint(x: x, y: -radius * 0.45))
+            hp.addLine(to: CGPoint(x: x + radius * 0.18, y: -radius * 0.1))
+        }
+        hatch.path = hp
+        hatch.strokeColor = Atlas.UI.ink.withAlphaComponent(0.35)
+        hatch.lineWidth = 0.8
+        body.addChild(hatch)
         let cp = CGMutablePath()
         for i in 0..<4 {
             let ang = CGFloat(i) * 1.6 + 0.4
@@ -349,36 +430,41 @@ final class RockNode: SKNode {
             cp.addLine(to: CGPoint(x: cos(ang + 0.4) * radius * 0.85, y: sin(ang + 0.4) * radius * 0.85))
         }
         cracks.path = cp
-        cracks.strokeColor = UIColor(red: 1, green: 0.95, blue: 0.7, alpha: 1)
+        cracks.strokeColor = Atlas.UI.paper
         cracks.lineWidth = max(1.5, radius * 0.05)
         cracks.alpha = 0
         body.addChild(cracks)
+        addChild(lamp)
         addChild(body)
         addChild(track)
+        addChild(starvedRing)
         addChild(ring)
+        addChild(mark)
         zPosition = 10
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    private static let gazeColor = UIColor(red: 0.44, green: 0.94, blue: 0.88, alpha: 0.18)
-    private static let starvedColor = UIColor(red: 1, green: 0.35, blue: 0.21, alpha: 0.75)
-
-    private var showsStarved = false
+    private var lastHeat: CGFloat = -1
 
     func sync(_ a: Asteroid, at p: CGPoint) {
         position = p
-        // Looked at without enough energy: a red ring that says "reload first".
-        if a.isStarved != showsStarved {
-            showsStarved = a.isStarved
-            track.strokeColor = a.isStarved ? Self.starvedColor : Self.gazeColor
-        }
+        starvedRing.isHidden = !a.isStarved
         body.zRotation = CGFloat(a.rotation)
         let t = CGFloat(min(1, a.progress))
-        body.fillColor = UIColor(red: 0.45 + 0.55 * t, green: 0.33 - 0.1 * t, blue: 0.24 - 0.12 * t, alpha: 1)
+        // The fill warms from the paper's shade to vermilion; recoloured only when it changes visibly.
+        if abs(t - lastHeat) > 0.02 {
+            lastHeat = t
+            let (r0, g0, b0) = Self.paperRGB, (r1, g1, b1) = Self.hotRGB
+            body.fillColor = UIColor(red: r0 + (r1 - r0) * t, green: g0 + (g1 - g0) * t, blue: b0 + (b1 - b0) * t, alpha: 1)
+        }
         cracks.alpha = t < 0.5 ? 0 : (t - 0.5) * 2
-        track.isHidden = t <= 0 && !a.isStarved
+        let looked = a.isTargeted || t > 0
+        lamp.isHidden = !a.isTargeted
+        track.isHidden = !looked
+        mark.isHidden = !looked
         if t > 0 {
+            // SpriteKit is y up: from 12 o'clock clockwise as the player sees it.
             let path = CGMutablePath()
             path.addArc(center: .zero, radius: radius + 10, startAngle: .pi / 2, endAngle: .pi / 2 - t * 2 * .pi, clockwise: true)
             ring.path = path
