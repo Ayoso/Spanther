@@ -10,7 +10,8 @@ struct GameView: View {
         GeometryReader { geo in
             ZStack {
                 if let scene {
-                    SpriteView(scene: scene, options: [.ignoresSiblingOrder])
+                    // Transparent, over RootView's paper and garden.
+                    SpriteView(scene: scene, options: [.ignoresSiblingOrder, .allowsTransparency])
                     HUDView(hud: scene.hud, paused: $paused, onQuit: { app.route = .menu }, onRecalibrate: { app.beginCalibration() },
                             canRecalibrate: app.mode == .eyes, touchMode: app.mode == .touch,
                             onEnergyTap: { [weak scene] in scene?.reloadTap() })
@@ -18,6 +19,7 @@ struct GameView: View {
             }
             .onAppear { if scene == nil { scene = makeScene(size: geo.size) } }
             .onChange(of: paused) { p in scene?.paused_ = p }
+            .onChange(of: app.showDebug) { d in scene?.showAim = d }
         }
         .ignoresSafeArea()
     }
@@ -28,6 +30,7 @@ struct GameView: View {
         s.config = app.balance
         s.marginPt = app.hitMarginPt
         s.useTouch = app.mode == .touch
+        s.showAim = app.showDebug
         #if DEBUG
         s.autoplay = app.autoplay != nil
         #endif
@@ -55,25 +58,29 @@ private struct HUDView: View {
         ZStack {
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
-                    pill { Text("\(hud.score)").monospacedDigit() }
+                    pill { Text("\(hud.score)").font(Atlas.title.monospacedDigit()) }
                     pill {
                         HStack(spacing: 4) {
                             ForEach(0..<5, id: \.self) { i in
-                                Circle().fill(i < hud.shields ? Color(red: 0.24, green: 0.55, blue: 1) : .clear)
-                                    .overlay(Circle().stroke(Palette.dim.opacity(0.5)))
-                                    .frame(width: 11, height: 11)
+                                Circle().fill(i < hud.shields ? Atlas.ink : .clear)
+                                    .overlay(Circle().stroke(Atlas.ink.opacity(0.5), lineWidth: 1))
+                                    .frame(width: 10, height: 10)
                             }
                         }
+                        .accessibilityLabel("Щиты: \(hud.shields) из 5")
                     }
-                    pill { Text("Ур. \(hud.level)") }
+                    pill { Text("Уровень \(hud.level)").font(.system(size: 15, weight: .semibold, design: .serif)) }
                     // Landscape: one row, so the meteors keep the height. The energy bar sits in it.
                     if hud.energyMax > 0 {
                         EnergyBar(energy: hud.energy, max: hud.energyMax, reloadProgress: hud.reloadProgress,
                                   needsReload: hud.needsReload, pulse: hud.reloadCount, touchMode: touchMode, onTap: onEnergyTap)
-                            .frame(maxWidth: 320)
+                            .frame(maxWidth: 300)
                     }
                     Spacer()
-                    Button { paused = true } label: { pill { Image(systemName: "pause.fill") } }
+                    Button { paused = true } label: {
+                        pill { Image(systemName: "pause.fill").font(.system(size: 15, weight: .semibold)) }
+                    }
+                    .accessibilityLabel("Пауза")
                 }
                 // The front camera's notch is on the left.
                 .padding(.leading, 56)
@@ -86,35 +93,36 @@ private struct HUDView: View {
                 }
             }
             if let b = hud.banner {
-                Text(b).font(.title3.bold()).padding(14)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+                Text(b).font(Atlas.title).foregroundStyle(Atlas.ink)
+                    .atlasPlate(padding: 14)
             }
             if hud.lookBack && !paused {
-                Text("Посмотри на экран").font(.title2.bold()).padding(16)
-                    .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
+                Text("Посмотри на экран").font(Atlas.display(26)).foregroundStyle(Atlas.ink)
+                    .atlasPlate(padding: 16)
             }
             if paused {
                 VStack(spacing: 12) {
-                    Text("Пауза").font(.title2.bold())
-                    Button { paused = false } label: { Text("Продолжить").frame(maxWidth: .infinity) }.buttonStyle(PrimaryButton())
+                    Text("Пауза").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
+                    Button { paused = false } label: { Text("Продолжить") }.buttonStyle(AtlasPrimaryButton())
                     if canRecalibrate {
-                        Button(action: onRecalibrate) { Text("Калибровка").frame(maxWidth: .infinity) }.buttonStyle(SecondaryButton())
+                        Button(action: onRecalibrate) { Text("Калибровка") }.buttonStyle(AtlasSecondaryButton())
                     }
-                    Button(action: onQuit) { Text("Главное меню").frame(maxWidth: .infinity) }.buttonStyle(SecondaryButton())
+                    Button(action: onQuit) { Text("Главное меню") }.buttonStyle(AtlasSecondaryButton())
                 }
-                .padding(22)
-                .frame(maxWidth: 360)
-                .background(Palette.panel, in: RoundedRectangle(cornerRadius: 18))
+                .frame(maxWidth: 320)
+                .atlasPlate(padding: 22)
                 .padding(16)
             }
         }
     }
 
     private func pill<C: View>(@ViewBuilder _ c: () -> C) -> some View {
-        c().font(.subheadline.bold())
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(.black.opacity(0.45), in: Capsule())
-            .foregroundStyle(.white)
+        c().font(.system(size: 15, weight: .semibold))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .frame(minHeight: 36)
+            .background(Atlas.paper.opacity(0.88), in: Capsule())
+            .overlay(Capsule().stroke(Atlas.ink.opacity(0.14), lineWidth: 1))
+            .foregroundStyle(Atlas.ink)
     }
 }
 
@@ -132,20 +140,22 @@ private struct EnergyBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "bolt.fill")
-                .foregroundStyle(energy > 0 ? Palette.gaze : Palette.hot)
+                .foregroundStyle(energy > 0 ? Atlas.ink : Atlas.vermilion)
             HStack(spacing: 3) {
                 ForEach(0..<max, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(i < energy ? Palette.gaze : Palette.dim.opacity(0.18))
-                        .frame(height: 14)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(i < energy ? Atlas.ink : Atlas.ink.opacity(0.12))
+                        .frame(height: 12)
                 }
             }
-            Text("\(energy)").font(.subheadline.bold()).monospacedDigit().foregroundStyle(.white)
+            Text("\(energy)").font(.system(size: 15, weight: .semibold, design: .serif)).monospacedDigit()
+                .foregroundStyle(Atlas.ink)
                 .frame(minWidth: 22, alignment: .trailing)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(.black.opacity(0.45), in: Capsule())
-        .overlay(Capsule().stroke(needsReload ? Palette.hot : Palette.gaze.opacity(glow ? 0.9 : 0), lineWidth: 2))
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Atlas.paper.opacity(0.88), in: Capsule())
+        .overlay(Capsule().stroke(needsReload ? Atlas.vermilion : Atlas.ink.opacity(glow ? 0.6 : 0.14),
+                                  lineWidth: needsReload || glow ? 2 : 1))
         .scaleEffect(glow ? 1.04 : 1)
         .contentShape(Capsule())
         .onTapGesture { if touchMode { onTap() } }
@@ -157,7 +167,7 @@ private struct EnergyBar: View {
     }
 }
 
-/// "Blink 3 times" with one icon per blink (or tap) that lights up as they are counted.
+/// "Blink 3 times" with one icon per blink (or tap) that fills as they are counted.
 private struct ReloadHint: View {
     let touchMode: Bool
     let progress: Int
@@ -171,19 +181,20 @@ private struct ReloadHint: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(touchMode ? "Нажми на энергию \(times)" : "Моргни \(times)").font(.title3.bold())
+            Text(touchMode ? "Нажми на энергию \(times)" : "Моргни \(times)")
+                .font(Atlas.title)
+                .foregroundStyle(Atlas.ink)
             HStack(spacing: 10) {
                 ForEach(0..<needed, id: \.self) { i in
-                    Image(systemName: touchMode ? "hand.tap.fill" : (i < progress ? "eye.slash.fill" : "eye.fill"))
-                        .foregroundStyle(i < progress ? Palette.gaze : Palette.dim.opacity(0.6))
+                    Image(systemName: touchMode ? "hand.tap.fill" : (i < progress ? "eye.slash.fill" : "eye"))
+                        .foregroundStyle(i < progress ? Atlas.vermilion : Atlas.ink.opacity(0.5))
                 }
             }
             .font(.title2)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18).padding(.vertical, 12)
-        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.hot.opacity(0.7), lineWidth: 1.5))
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(Atlas.paper.opacity(0.92), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Atlas.vermilion.opacity(0.8), lineWidth: 1.5))
         .allowsHitTesting(false)
     }
 }

@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import QuartzCore
+import UIKit
 
 enum Route: Equatable {
     case menu
@@ -40,11 +41,18 @@ final class TrackingStatus: ObservableObject {
     @Published var aimCorrection = Vec2.zero
     @Published var aimLabels = 0
     @Published var aimRejected = 0
+    /// The light ARKit estimates around the face (lumens), for the "too dark" hint and the debug overlay.
+    @Published var light: Double?
 }
 
 /// App state shared by all screens. Main thread only.
 final class AppModel: ObservableObject {
-    @Published var route: Route = .menu { didSet { lookedAtMeteor = nil } }
+    @Published var route: Route = .menu {
+        didSet {
+            lookedAtMeteor = nil
+            applyBrightness()
+        }
+    }
     @Published var mode: ControlMode = .eyes
     @Published var report: AccuracyReport?
     @Published var showDebug = false
@@ -52,6 +60,31 @@ final class AppModel: ObservableObject {
     /// Adds the aim adapter's correction to the gaze. Off: the adapter still learns and the CSV still shows its
     /// correction, but the aim is the calibrated model's alone, for comparing the two on the phone.
     @Published var adaptAim = true
+    /// Night vision: for playing in a dark room. ARKit's face tracking needs some light (Apple says it does not
+    /// work in total darkness), and there the only light on the face is the screen's. So the screen goes to full
+    /// brightness on the play screens, the camera runs at its slowest frame rate for a longer exposure, and the
+    /// gaze model drops the Vision pupils, which are not found in the dark. Switching it asks for a new
+    /// calibration, since the model is fitted on the features it plays with. Kept between launches.
+    @Published var nightVision = UserDefaults.standard.bool(forKey: "nightVision") {
+        didSet {
+            guard nightVision != oldValue else { return }
+            UserDefaults.standard.set(nightVision, forKey: "nightVision")
+            model = nil
+            adapter = nil
+            report = nil
+            aimCorrection = .zero
+            filter.reset()
+            if FaceTracker.isSupported { tracker.setNightVision(nightVision) }
+            logTracking()
+            applyBrightness()
+        }
+    }
+    /// Host time the app started, when the garden begins to grow.
+    let launchTime = CACurrentMediaTime()
+    /// The app is in front (scene phase active).
+    private var active = true
+    /// The screen brightness before night vision raised it, to give back on the menu or in the background.
+    private var savedBrightness: CGFloat?
     /// Where «Играть» on the calibration result leads.
     private(set) var afterCalibration: Route = .game
 
@@ -94,7 +127,7 @@ final class AppModel: ObservableObject {
 
     /// Points per centimetre. Current iPhones are about 60 pt/cm (163 pt per inch on 2x, ~153 on 3x Pro).
     let ptPerCm = 60.0
-    var featureSet: GazeFeatures.FeatureSet { usePupils ? .eyesAndPupils : .eyes }
+    var featureSet: GazeFeatures.FeatureSet { usePupils && !nightVision ? .eyesAndPupils : .eyes }
 
     // Collection during calibration / check
     private var collecting: (target: Vec2, kind: String)?
@@ -141,7 +174,25 @@ final class AppModel: ObservableObject {
     private func logTracking() {
         let i = tracker.info
         logger.tracking(format: i.format, offered: i.offered, thermal: i.thermal, lowPower: i.lowPower,
-                        screen: i.screen, vision: i.vision, time: CACurrentMediaTime())
+                        screen: i.screen, vision: i.vision, night: i.night, time: CACurrentMediaTime())
+    }
+
+    /// Night vision lights the face with the screen: full brightness on every screen but the menu, while the app
+    /// is in front. The player's own brightness comes back on the menu and when the app leaves the screen.
+    private func applyBrightness() {
+        guard let screen = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.screen else { return }
+        if nightVision && active && route != .menu {
+            if savedBrightness == nil { savedBrightness = screen.brightness }
+            screen.brightness = 1
+        } else if let b = savedBrightness {
+            screen.brightness = b
+            savedBrightness = nil
+        }
+    }
+
+    func scenePhaseChanged(active: Bool) {
+        self.active = active
+        applyBrightness()
     }
 
     var eyeTrackingSupported: Bool { FaceTracker.isSupported }
@@ -154,7 +205,9 @@ final class AppModel: ObservableObject {
     /// side of the screen, so the app does not offer the other landscape side.
     static let screenOrientation = ScreenOrientation.landscapeRight
 
-    func startTracking() { if FaceTracker.isSupported { tracker.start(orientation: Self.screenOrientation) } }
+    func startTracking() {
+        if FaceTracker.isSupported { tracker.start(orientation: Self.screenOrientation, night: nightVision) }
+    }
 
     private func handle(_ s: TrackingSample) {
         lastSampleTime = s.timestamp
@@ -230,7 +283,7 @@ final class AppModel: ObservableObject {
                 if case .point(let p) = gaze { collectedGaze.append(p) }
                 distances.append(f.distance)
                 logger.sample(kind: c.kind, time: s.timestamp, target: c.target, gaze: gazePoint, f: f, blink: s.blink, hold: false,
-                              processingMs: s.processingMs)
+                              processingMs: s.processingMs, light: s.light)
             }
         } else {
             gaze = .lost
@@ -238,16 +291,16 @@ final class AppModel: ObservableObject {
         if route == .game, mode == .eyes, let f = s.features {
             logger.sample(kind: "frame", time: s.timestamp, target: lookedAtMeteor, gaze: gazePoint, f: f,
                           blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
-                          correction: adapter == nil ? nil : aimCorrection)
+                          correction: adapter == nil ? nil : aimCorrection, light: s.light)
         }
         if route == .rhythm, let f = s.features {
             logger.sample(kind: "rhythm_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
                           blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
-                          correction: adapter == nil ? nil : aimCorrection, locked: rhythm?.lock.locked)
+                          correction: adapter == nil ? nil : aimCorrection, locked: rhythm?.lock.locked, light: s.light)
         }
         if route == .winkTest, let f = s.features {
             logger.sample(kind: "wink_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
-                          blink: s.blink, hold: false, processingMs: s.processingMs)
+                          blink: s.blink, hold: false, processingMs: s.processingMs, light: s.light)
         }
         // The wink test draws the eyelids live, so it gets the numbers 30 times a second.
         if s.timestamp - lastStatusPush > (route == .winkTest ? 1.0 / 30 : 0.1) {
@@ -256,6 +309,7 @@ final class AppModel: ObservableObject {
             status.processingMs = s.processingMs
             status.faceFound = s.features != nil
             status.features = s.features
+            status.light = s.light
             status.gaze = gazePoint
             status.blink = s.blink
             status.blinkBase = blinkDetector.openLevel()
@@ -382,8 +436,12 @@ final class AppModel: ObservableObject {
             // The gaze is still held from before the lid moved, so the lock is where the player aimed.
             let aim = gazePoint
             s.updateLock(aim: aim, host: CACurrentMediaTime())
+            let rejectedBefore = s.judge.lastRejected
             if let hit = s.closure(side: e.side, host: e.onset, aim: aim) {
                 record(hit, in: s, host: e.onset, side: e.side.rawValue, aim: aim, locked: s.lock.locked)
+            } else if let r = s.judge.lastRejected, r != rejectedBefore {
+                logger.rhythmReject(time: e.onset, index: r.index, reason: r.reason.rawValue, side: e.side.rawValue,
+                                    distance: r.distanceSec)
             }
         case .done:
             break
@@ -433,6 +491,15 @@ final class AppModel: ObservableObject {
         // The aim is not drawn: the note (or the start star) it is locked on lights up instead.
         s.updateLock(aim: mode == .eyes ? gazePoint : nil, host: now)
         guard s.phase == .playing else { return }
+        for d in s.takeStartedDistractions(host: now) {
+            let at: Vec2?
+            switch d.kind {
+            case .firefly, .seed: at = d.position(at: d.start)
+            case .bloom, .swing: at = s.garden.lianaPoints(d.index, time: now).last
+            case .surge: at = s.garden.path(tree: d.index, to: d.tip, time: now).last
+            }
+            logger.distraction(time: now, kind: d.kind.rawValue, at: at)
+        }
         for i in s.tick(host: now) {
             logger.rhythmNote(hit: false, time: now, index: i, target: s.points[i], judgement: Judgement.miss.rawValue,
                               offset: nil, aimDistance: nil, side: nil)

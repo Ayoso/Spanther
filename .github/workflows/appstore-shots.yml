@@ -1,0 +1,84 @@
+# Full-resolution Simulator screenshots for the App Store listing.
+# Runs on the 6.9" iPhone (iPhone 16/17 Pro Max, 2868x1320 in landscape), keeps the PNGs at full size
+# and pushes them to the appstore-shots branch. Start it with "Run workflow" or a push to this file.
+name: App Store screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/appstore-shots.yml
+
+jobs:
+  shots:
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for the Simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SpantherGaze/SpantherGaze.xcodeproj \
+            -target SpantherGaze \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            ARCHS="$(uname -m)" ONLY_ACTIVE_ARCH=NO \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tail -n 20
+          codesign --force --sign - --timestamp=none build/Debug-iphonesimulator/SpantherGaze.app
+      - name: Boot a 6.9-inch iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          phones = [d for runtime, ds in devices.items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
+          want = ("iPhone 17 Pro Max", "iPhone 16 Pro Max", "iPhone 16 Plus", "iPhone 15 Pro Max")
+          pick = next((d for w in want for d in phones if d["name"] == w), phones[-1])
+          print(pick["udid"], file=sys.stdout)
+          print("picked", pick["name"], file=sys.stderr)
+          ')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$UDID" -b
+          # Clean status bar for store shots.
+          xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 \
+            --wifiBars 3 --cellularBars 4 || true
+      - name: Take screenshots
+        run: |
+          OUT="$PWD/out"; mkdir -p "$OUT"
+          BID=com.spanther.SpantherGaze
+          xcrun simctl install "$UDID" build/Debug-iphonesimulator/SpantherGaze.app
+          shot() { xcrun simctl io "$UDID" screenshot --type=png "$OUT/$1.png" >/dev/null 2>&1 || true; }
+
+          xcrun simctl launch "$UDID" "$BID"; sleep 8; shot menu
+          xcrun simctl terminate "$UDID" "$BID" || true
+
+          xcrun simctl launch "$UDID" "$BID" -SpantherAutoplay eyes
+          for i in $(seq -w 1 50); do sleep 1.2; shot "eyes-$i"; done
+          xcrun simctl terminate "$UDID" "$BID" || true
+
+          xcrun simctl launch "$UDID" "$BID" -SpantherAutoplay rhythm
+          sleep 2; shot rhythm-tracks
+          for i in $(seq -w 1 40); do sleep 1.5; shot "rhythm-$i"; done
+          sleep 15; shot rhythm-results-a; sleep 4; shot rhythm-results-b
+          xcrun simctl terminate "$UDID" "$BID" || true
+
+          xcrun simctl launch "$UDID" "$BID" -SpantherAutoplay wink
+          sleep 4; shot wink-intro; sleep 11; shot wink-a; sleep 20; shot wink-b
+          xcrun simctl terminate "$UDID" "$BID" || true
+          ls -la "$OUT" | head -5
+          sips -g pixelWidth -g pixelHeight "$OUT/menu.png" || true
+      - name: Publish to the appstore-shots branch
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd out
+          git init -q -b appstore-shots
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "App Store screenshots for ${GITHUB_REF_NAME} at ${GITHUB_SHA}"
+          git push -fq "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:appstore-shots

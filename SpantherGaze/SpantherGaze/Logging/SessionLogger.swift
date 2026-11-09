@@ -23,6 +23,9 @@ final class SessionLogger {
         case score, accuracy, latency = "latency_s"
         // The rhythm mode's target lock: the note index the hidden aim is locked on, -1 for the start star.
         case locked
+        // Night vision (tracking rows: 1 on), the light ARKit estimates on each frame (lumens, about 1000 in a lit
+        // room), and the rhythm play's distractions (their kind).
+        case night, light = "light_lm", distraction
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -77,9 +80,10 @@ final class SessionLogger {
     /// `locked`: in `rhythm_frame` rows, the note the aim is locked on (-1 the start star, empty none).
     func sample(kind: String, time: Double, target: Vec2?, gaze: Vec2?, f: GazeFeatures,
                 blink: (left: Double, right: Double)?, hold: Bool, processingMs: Double? = nil, correction: Vec2? = nil,
-                locked: Int? = nil) {
+                locked: Int? = nil, light: Double? = nil) {
         var r = Row(kind: kind, time: time)
         r.set(.locked, locked)
+        r.set(.light, light)
         r.set(.corrX, correction?.x)
         r.set(.corrY, correction?.y)
         r.set(.targetX, target?.x)
@@ -109,8 +113,9 @@ final class SessionLogger {
     /// and Low Power Mode. Written when a session starts and whenever the thermal state or Low Power Mode
     /// changes, so a session's frame rate can be explained from its CSV. The format strings hold no commas.
     func tracking(format: String, offered: String, thermal: String, lowPower: Bool, screen: String, vision: String,
-                  time: Double) {
+                  night: Bool, time: Double) {
         var r = Row(kind: "tracking", time: time)
+        r[.night] = night ? "1" : "0"
         r[.videoFormat] = format
         r[.formatsOffered] = offered
         r[.thermal] = thermal
@@ -197,6 +202,28 @@ final class SessionLogger {
         r.set(.offset, offset)
         r.set(.aim, aimDistance)
         r[.side] = side ?? ""
+        write(r.line)
+    }
+
+    /// `note_reject`: an eye closure that landed in a note's window but could not play it (time = its onset):
+    /// the note, the reason (judgement column: `blink` both eyes where one is needed, `wrongEye`), the eye, and
+    /// how far it was from the note's expected time (offset column, s).
+    func rhythmReject(time: Double, index: Int, reason: String, side: String, distance: Double) {
+        var r = Row(kind: "note_reject", time: time)
+        r.set(.note, index)
+        r[.judgement] = reason
+        r[.side] = side
+        r.set(.offset, distance)
+        write(r.line)
+    }
+
+    /// `distraction`: a distraction of the rhythm play began (time = host time), its kind and where it started
+    /// (screen pt), so a replay can see whether the gaze went to it.
+    func distraction(time: Double, kind: String, at p: Vec2?) {
+        var r = Row(kind: "distraction", time: time)
+        r[.distraction] = kind
+        r.set(.targetX, p?.x)
+        r.set(.targetY, p?.y)
         write(r.line)
     }
 
