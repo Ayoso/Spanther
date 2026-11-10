@@ -122,7 +122,11 @@ private struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Text("Занятия").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Занятия").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
+                    Text("Результаты игры, а не медицинские показатели.")
+                        .font(Atlas.caption).foregroundStyle(Atlas.inkSoft)
+                }
                 Spacer()
                 if let url = exportURL, !app.sessions.isEmpty {
                     ShareLink(item: url) { Label("Таблица", systemImage: "square.and.arrow.up") }
@@ -169,18 +173,7 @@ private struct HistoryView: View {
                     .font(Atlas.caption)
                     .foregroundStyle(Atlas.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(Array(ReportText.progress(plays).enumerated()), id: \.offset) { item in
-                    Text(item.element)
-                        .font(Atlas.caption)
-                        .foregroundStyle(Atlas.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 4)
-                Text("Это результаты игры, а не медицинские показатели.")
-                    .font(Atlas.caption.italic())
-                    .foregroundStyle(Atlas.inkSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
+                trends
                 if !plays.isEmpty {
                     Button(role: .destructive) { confirmDelete = true } label: {
                         Text(app.currentChildCode.isEmpty ? "Удалить все занятия" : "Удалить занятия \(app.currentChildCode)")
@@ -194,6 +187,33 @@ private struct HistoryView: View {
         .confirmationDialog(deleteQuestion, isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive) { app.deleteSessions(of: app.childCode) }
             Button("Отмена", role: .cancel) {}
+        }
+    }
+
+    /// The first and the newest of the plays that compare, per game: «сбито 58% → 78%».
+    @ViewBuilder private var trends: some View {
+        let list = ReportText.trends(plays)
+        if !list.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Первая и последняя игра")
+                    .font(Atlas.caption.weight(.semibold))
+                    .foregroundStyle(Atlas.inkSoft)
+                    .textCase(.uppercase)
+                ForEach(list, id: \.self) { t in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t.title).font(Atlas.caption.weight(.semibold)).foregroundStyle(Atlas.ink)
+                        ForEach(t.rows, id: \.self) { r in
+                            HStack(spacing: 8) {
+                                Text(r.label).foregroundStyle(Atlas.inkSoft)
+                                Spacer(minLength: 4)
+                                Text("\(r.first) → \(r.last)").foregroundStyle(Atlas.ink).monospacedDigit()
+                            }
+                            .font(Atlas.caption)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
         }
     }
 
@@ -224,7 +244,7 @@ private struct HistoryView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(ReportText.when(s.start)).font(Atlas.caption.weight(.semibold)).foregroundStyle(Atlas.ink)
-                Text(ReportText.setup(s)).font(Atlas.caption).foregroundStyle(Atlas.inkSoft).lineLimit(1)
+                Text(ReportText.setup(s, calibration: false)).font(Atlas.caption).foregroundStyle(Atlas.inkSoft).lineLimit(1)
                 Spacer(minLength: 0)
                 if app.currentChildCode.isEmpty, !s.childCode.isEmpty {
                     Text(s.childCode).font(Atlas.caption.weight(.semibold)).foregroundStyle(Atlas.vermilion)
@@ -242,15 +262,19 @@ private struct HistoryView: View {
 
 // MARK: - Words
 
-/// The report's numbers in words, the Russian way: decimal commas, minutes and seconds, plural forms.
+/// The report's numbers in words, the Russian way: decimal commas, minutes and seconds, plural forms, and no-break
+/// spaces that keep a number with its unit and its label on one line.
 enum ReportText {
+    static let nb = "\u{00A0}"
+
     static func percent(_ v: Double?) -> String { v.map { "\(Int(($0 * 100).rounded()))%" } ?? "–" }
 
-    static func seconds(_ v: Double?) -> String { v.map { SessionHistory.number($0, 1) + " с" } ?? "–" }
+    static func seconds(_ v: Double?) -> String { v.map { SessionHistory.number($0, 1) + nb + "с" } ?? "–" }
 
     static func duration(_ sec: Double) -> String {
-        let total = Int(sec.rounded())
-        return total < 60 ? "\(total) с" : "\(total / 60) мин \(total % 60) с"
+        let total = Int(sec.rounded()), m = total / 60, s = total % 60
+        if m == 0 { return "\(s)\(nb)с" }
+        return s == 0 ? "\(m)\(nb)мин" : "\(m)\(nb)мин \(s)\(nb)с"
     }
 
     /// 1 игра, 2 игры, 5 игр, 21 игра.
@@ -272,48 +296,67 @@ enum ReportText {
         Atlas.levelName(RhythmLevel(rawValue: s.rhythmLevel ?? "") ?? .normal).lowercased()
     }
 
-    /// The game, how it was played, for how long, and the calibration before it.
-    static func setup(_ s: SessionSummary) -> String {
+    private static func calibration(_ s: SessionSummary) -> String? {
+        s.calibrationErrorCm.map { "промах калибровки\(nb)\(SessionHistory.number($0, 1))\(nb)см" }
+    }
+
+    /// The game, how it was played, for how long, and (with `calibration`) the calibration error before it.
+    static func setup(_ s: SessionSummary, calibration withCalibration: Bool = true) -> String {
         var parts = [s.game == .meteors ? "Метеориты" : "Ритм", s.byEye ? "взглядом" : "пальцем", duration(s.durationSec)]
-        if let e = s.calibrationErrorCm { parts.append("промах калибровки \(SessionHistory.number(e, 1)) см") }
+        if withCalibration, let c = calibration(s) { parts.append(c) }
         return parts.joined(separator: " · ")
     }
 
-    /// One play's results in a line.
+    /// One play's results in a line, ending with the calibration error before it.
     static func results(_ s: SessionSummary) -> String {
+        var parts: [String]
         switch s.game {
         case .meteors:
-            var parts = ["Сбито \(s.burned ?? 0) из \(s.meteors ?? 0) (\(percent(s.burnedShare)))"]
-            if let v = s.meanFirstLookSec { parts.append("\(s.byEye ? "первый взгляд" : "первое касание") \(seconds(v))") }
-            if let v = s.slipsPerMeteor { parts.append("срывов на метеорит \(SessionHistory.number(v, 1))") }
-            if let l = s.maxLevel { parts.append("уровень \(l)") }
-            return parts.joined(separator: " · ")
+            parts = ["Сбито \(s.burned ?? 0)\(nb)из\(nb)\(s.meteors ?? 0)\(nb)(\(percent(s.burnedShare)))"]
+            if let v = s.meanFirstLookSec { parts.append((s.byEye ? "первый взгляд" : "первое касание") + nb + seconds(v)) }
+            if let v = s.slipsPerMeteor { parts.append("срывов на метеорит" + nb + SessionHistory.number(v, 1)) }
+            if let l = s.maxLevel { parts.append("уровень\(nb)\(l)") }
         case .rhythm:
-            var parts = ["«\(s.track ?? "")», \(level(s))", "точность \(percent(s.accuracy))",
-                         "сыграно \(s.hits ?? 0) из \(s.notes ?? 0)", "лучшая серия \(s.maxCombo ?? 0)"]
-            if let w = s.extraWinks { parts.append("лишних подмигиваний \(w)") }
-            return parts.joined(separator: " · ")
+            parts = ["«\(s.track ?? "")», \(level(s))", "точность\(nb)\(percent(s.accuracy))",
+                     "сыграно \(s.hits ?? 0)\(nb)из\(nb)\(s.notes ?? 0)", "лучшая серия\(nb)\(s.maxCombo ?? 0)"]
+            if let w = s.extraWinks { parts.append("лишних подмигиваний\(nb)\(w)") }
         }
+        if let c = calibration(s) { parts.append(c) }
+        return parts.joined(separator: " · ")
+    }
+
+    struct Trend: Hashable {
+        struct Row: Hashable {
+            let label: String
+            let first: String
+            let last: String
+        }
+        let title: String
+        let rows: [Row]
     }
 
     /// The first and the newest of the plays that compare (SessionHistory.progress), per game.
-    static func progress(_ plays: [SessionSummary]) -> [String] {
-        var out: [String] = []
+    static func trends(_ plays: [SessionSummary]) -> [Trend] {
+        var out: [Trend] = []
         let m = SessionHistory.progress(plays, game: .meteors)
         if let a = m.first, let b = m.last {
-            let games = plural(m.count, "игра", "игры", "игр"), how = b.byEye ? "взглядом" : "пальцем"
-            out.append("Метеориты, \(m.count) \(games) \(how), первая и последняя:")
-            out.append("сбито \(percent(a.burnedShare)) и \(percent(b.burnedShare))")
+            var rows = [Trend.Row(label: "сбито", first: percent(a.burnedShare), last: percent(b.burnedShare))]
             if a.meanFirstLookSec != nil, b.meanFirstLookSec != nil {
-                let look = b.byEye ? "первый взгляд" : "первое касание"
-                out.append("\(look) \(seconds(a.meanFirstLookSec)) и \(seconds(b.meanFirstLookSec))")
+                rows.append(Trend.Row(label: b.byEye ? "первый взгляд" : "первое касание",
+                                      first: seconds(a.meanFirstLookSec), last: seconds(b.meanFirstLookSec)))
             }
+            if let x = a.slipsPerMeteor, let y = b.slipsPerMeteor {
+                rows.append(Trend.Row(label: "срывов на метеорит", first: SessionHistory.number(x, 1),
+                                      last: SessionHistory.number(y, 1)))
+            }
+            let games = plural(m.count, "игра", "игры", "игр"), how = b.byEye ? "взглядом" : "пальцем"
+            out.append(Trend(title: "Метеориты \(how), \(m.count) \(games)", rows: rows))
         }
         let r = SessionHistory.progress(plays, game: .rhythm)
         if let a = r.first, let b = r.last {
             let games = plural(r.count, "игра", "игры", "игр")
-            out.append("Ритм, \(level(b)) уровень, \(r.count) \(games), первая и последняя:")
-            out.append("точность \(percent(a.accuracy)) и \(percent(b.accuracy))")
+            out.append(Trend(title: "Ритм, \(level(b)) уровень, \(r.count) \(games)",
+                             rows: [Trend.Row(label: "точность", first: percent(a.accuracy), last: percent(b.accuracy))]))
         }
         return out
     }
