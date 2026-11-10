@@ -5,6 +5,8 @@ import SwiftUI
 /// garden behind (RootView draws it).
 struct MenuView: View {
     @EnvironmentObject var app: AppModel
+    /// The report sheet: the summary of the meteor play that just ended, or the child's history.
+    @State private var report: ReportPage?
 
     var body: some View {
         // The smallest screens (iPhone SE, 4.7") cannot fit the whole menu with a warning on it: there it
@@ -13,6 +15,21 @@ struct MenuView: View {
             content
             ScrollView { content }
         }
+        .sheet(item: $report) { page in ReportSheet(page: page).environmentObject(app) }
+        .onAppear {
+            // After the game screen closes: the sheet waits for the menu to be on screen.
+            DispatchQueue.main.async { showLastSummary() }
+            #if DEBUG
+            if app.demoReport == "history" { DispatchQueue.main.async { report = .history } }
+            #endif
+        }
+        .onChange(of: app.lastSummary) { _ in showLastSummary() }
+    }
+
+    private func showLastSummary() {
+        guard let s = app.lastSummary else { return }
+        app.lastSummary = nil
+        report = .summary(s)
     }
 
     private var content: some View {
@@ -45,7 +62,33 @@ struct MenuView: View {
                     .font(Atlas.caption)
                     .foregroundStyle(Atlas.inkSoft)
             }
+            // The name keeps its whole width; the sessions button takes what is left.
+            .layoutPriority(1)
+            // The child's sessions, with the code they are saved under; just the icon where the row is narrow.
+            ViewThatFits(in: .horizontal) {
+                sessionsButton(withTitle: true)
+                sessionsButton(withTitle: false)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+
+    private func sessionsButton(withTitle: Bool) -> some View {
+        let code = app.currentChildCode
+        return Button { report = .history } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                if withTitle { Text(code.isEmpty ? "Занятия" : "Занятия · \(code)").lineLimit(1) }
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Atlas.ink)
+            .padding(.horizontal, 12)
+            .frame(minWidth: 44, minHeight: 44)
+            .background(Atlas.paper.opacity(0.88), in: Capsule())
+            .overlay(Capsule().stroke(Atlas.ink.opacity(0.14), lineWidth: 1))
+            .fixedSize()
+        }
+        .accessibilityLabel(code.isEmpty ? "Занятия" : "Занятия ребёнка \(code)")
     }
 
     private var meteorPlate: some View {

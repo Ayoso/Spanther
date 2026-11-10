@@ -103,7 +103,19 @@ Menu switch «Ночное зрение», for a dark room. ARKit's face trackin
 
 Every tracked frame now logs ARKit's light estimate (`light_lm`, about 1000 in a lit room), and `tracking` rows say whether night vision was on (`night`). The calibration screen warns when the face is not found in the dark or the light is low.
 
+## Sessions and the report
+
+Menu, the «Занятия» button at the top. For the specialist and the parent: game results only, no face data and no diagnosis, and the screens say so.
+
+- Child code: the specialist gives each child a code (for example К-07) instead of a name. Every play is saved under the code set when it started. The code is kept between launches.
+- A meteor play is one visit to the game screen. When it closes, the menu shows its summary: meteors burned of those that left the play, the mean time from a meteor's appearance to the first look at it (by finger, the first touch), slips per meteor (the gaze left long enough for the burn to drain to zero), the highest level, the time on screen, and the check error of the calibration before it. A rhythm play is saved when its track ends: accuracy, notes played, perfect ones, the best combo, and winks that played no note.
+- History: the plays of the code, newest first, and for each game the first and the last of the plays that compare (same control, and for the rhythm the same level). «Таблица» shares one CSV of all plays, laid out for a Russian spreadsheet (semicolons, decimal commas, UTF-8 with a byte order mark). Delete removes the code's plays from the phone.
+- Storage: `Application Support/sessions.json` (`App/SessionStore.swift`), written when a play ends and when the app leaves the screen mid-play. The numbers come from `GazeCore/SessionReport.swift`, tested in `SessionReportTests`.
+- CI: the rhythm bot's finished track must show up in `sessions.json`, and `-SpantherDemoReport summary|history` (Debug only) opens the report with made-up plays for the screenshots.
+
 ## Unverified on device
+
+- The report screens: seen only in Simulator screenshots so far.
 
 - Night vision: whether the screen's light is enough for ARKit in a dark room, the accuracy without pupils, and the 120 lm threshold of the "dark" hint.
 - The garden's cost on the frame rate, and whether the distractions are fair for children. It is drawn in its own layer at 30 fps and rasterised off the main thread: at 60 fps on the main thread it slowed the CI simulator a lot (a screenshot took 4 to 9 s instead of 2.6), and on the phone the main thread also receives every tracking frame. Check `track fps` in «Отладка» on the menu, the meteors and the rhythm play.

@@ -284,6 +284,29 @@ jobs:
             pass "rhythm: the play screen changes between screenshots"
           fi
           xcrun simctl terminate "$UDID" "$BID" || true
+
+          # Session history: the finished track is kept on the phone (Application Support/sessions.json).
+          SJ="$DATA/Library/Application Support/sessions.json"
+          if [ -f "$SJ" ]; then cp "$SJ" "$OUT/sessions.json"; fi
+          if python3 - "$OUT/sessions.json" > "$OUT/sessions.check.txt" 2>&1 <<'PY'
+          import json, sys
+          plays = json.load(open(sys.argv[1]))
+          rhythm = [p for p in plays if p["game"] == "rhythm"]
+          last = rhythm[-1] if rhythm else {}
+          print(f"{len(plays)} plays kept, {len(rhythm)} rhythm, the last with {last.get('hits')} of {last.get('notes')} notes"
+                f" played, accuracy {last.get('accuracy', 0):.2f}")
+          sys.exit(0 if rhythm and last["notes"] >= 60 and last["hits"] >= 0.75 * last["notes"] else 1)
+          PY
+          then pass "history: $(tail -n 1 "$OUT/sessions.check.txt")"; else fail "history: $(tail -n 1 "$OUT/sessions.check.txt")"; fi
+
+          # The report screens with made-up plays (-SpantherDemoReport): the summary after a meteor play, and a
+          # child's history.
+          for page in summary history; do
+            xcrun simctl launch --stdout="$OUT/report-$page.stdout.log" --stderr="$OUT/report-$page.stderr.log" "$UDID" "$BID" -SpantherDemoReport "$page"
+            sleep 8; shot "report-$page"
+            if running; then pass "report $page: app running"; else fail "report $page: app not running"; fi
+            xcrun simctl terminate "$UDID" "$BID" || true
+          done
           cp ~/Library/Logs/DiagnosticReports/SpantherGaze* "$OUT/" 2>/dev/null || true
           cat "$OUT/checks.txt"
       - name: Menu and rhythm track list on the smallest screen (iPhone SE, 4.7 inch)
@@ -319,6 +342,18 @@ jobs:
             echo "PASS rhythm track list on iPhone SE: app running" >> "$OUT/checks.txt"
           else
             echo "FAIL rhythm track list on iPhone SE: app not running" >> "$OUT/checks.txt"
+          fi
+          xcrun simctl terminate "$SE" "$BID" || true
+          # The history, the report's widest screen.
+          xcrun simctl launch "$SE" "$BID" -SpantherDemoReport history
+          sleep 8
+          xcrun simctl io "$SE" screenshot --type=png "$OUT/tmp.png" >/dev/null 2>&1 \
+            && sips -s format jpeg -s formatOptions 80 -Z 1200 "$OUT/tmp.png" --out "$OUT/report-history-se.jpg" >/dev/null 2>&1
+          rm -f "$OUT/tmp.png"
+          if xcrun simctl spawn "$SE" launchctl list | grep -q "UIKitApplication:$BID"; then
+            echo "PASS report history on iPhone SE: app running" >> "$OUT/checks.txt"
+          else
+            echo "FAIL report history on iPhone SE: app not running" >> "$OUT/checks.txt"
           fi
           xcrun simctl terminate "$SE" "$BID" || true
       - name: Publish to the ci-screenshots branch
