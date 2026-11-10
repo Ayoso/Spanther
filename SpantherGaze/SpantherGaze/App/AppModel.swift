@@ -51,6 +51,8 @@ final class AppModel: ObservableObject {
         didSet {
             lookedAtMeteor = nil
             applyBrightness()
+            if oldValue == .game, route != .game { finishMeteorPlay() }
+            if route == .game, oldValue != .game { beginMeteorPlay() }
         }
     }
     @Published var mode: ControlMode = .eyes
@@ -163,6 +165,14 @@ final class AppModel: ObservableObject {
                 route = .game
             }
         }
+        #if DEBUG
+        if let demo = demoReport {
+            // Made-up plays for the CI screenshots of the report, in memory only: nothing goes into the history file.
+            sessions = Self.demoSessions()
+            childCode = "К-07"
+            if demo == "summary" { lastSummary = sessions.last { $0.game == .meteors && $0.childCode == "К-07" } }
+        }
+        #endif
         tracker.onSample = { [weak self] s in self?.handle(s) }
         tracker.onInfo = { [weak self] info in
             self?.status.tracking = info
@@ -193,6 +203,17 @@ final class AppModel: ObservableObject {
     func scenePhaseChanged(active: Bool) {
         self.active = active
         applyBrightness()
+        guard var p = meteorPlay else { return }
+        let now = CACurrentMediaTime()
+        if active {
+            if p.since == nil { p.since = now }
+        } else if let since = p.since {
+            p.shownSec += now - since
+            p.since = nil
+        }
+        meteorPlay = p
+        // iOS may end an app in the background without a word, so the play so far goes into the history now.
+        if !active { saveMeteorPlay() }
     }
 
     var eyeTrackingSupported: Bool { FaceTracker.isSupported }
@@ -512,6 +533,11 @@ final class AppModel: ObservableObject {
             }
             s.isNewBest = RhythmRecords.save(s.track, s.level, score: s.judge.score, stars: s.judge.stars)
             logger.rhythmEnd(time: now, score: s.judge.score, accuracy: s.judge.accuracy, latency: s.judge.latencySec)
+            let played = now - (s.startHost ?? now)
+            keep(.rhythm(id: UUID().uuidString, childCode: currentChildCode, start: Date().addingTimeInterval(-played),
+                         durationSec: played, byEye: mode == .eyes,
+                         calibrationErrorCm: mode == .eyes ? report?.meanErrorCm : nil,
+                         track: s.track.title, level: s.level, judge: s.judge))
         }
     }
 
@@ -683,5 +709,128 @@ final class AppModel: ObservableObject {
     #endif
 
     var logURL: URL { logger.url }
-    func log(_ r: AsteroidRecord) { logger.asteroid(r, time: CACurrentMediaTime()) }
+
+    func log(_ r: AsteroidRecord) {
+        logger.asteroid(r, time: CACurrentMediaTime())
+        // The CI bot opens the game in `init`, where setting `route` starts no play: its play starts here.
+        if meteorPlay == nil, route == .game { beginMeteorPlay() }
+        meteorPlay?.tally.add(r)
+    }
+
+    // MARK: session report
+
+    /// The code the specialist gave the child instead of a name; every play is saved under it. Kept between launches.
+    @Published var childCode = UserDefaults.standard.string(forKey: "childCode") ?? "" {
+        didSet { UserDefaults.standard.set(childCode, forKey: "childCode") }
+    }
+    var currentChildCode: String { childCode.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// Every play saved on this phone (SessionStore), in the order they ended.
+    @Published private(set) var sessions: [SessionSummary] = SessionStore.load()
+    /// The meteor play that just ended, for the menu to show once.
+    @Published var lastSummary: SessionSummary?
+
+    /// The meteor play on screen: one per visit to the game screen, with what it was set up with.
+    private struct MeteorPlay {
+        let id = UUID().uuidString
+        let start = Date()
+        let childCode: String
+        let byEye: Bool
+        let calibrationErrorCm: Double?
+        var tally = MeteorTally()
+        /// Seconds on screen with the app in front, before `since`: the host time it last came to the front.
+        var shownSec = 0.0
+        var since: Double?
+    }
+    private var meteorPlay: MeteorPlay?
+
+    private func beginMeteorPlay() {
+        meteorPlay = MeteorPlay(childCode: currentChildCode, byEye: mode == .eyes,
+                                calibrationErrorCm: mode == .eyes ? report?.meanErrorCm : nil,
+                                since: active ? CACurrentMediaTime() : nil)
+    }
+
+    /// Writes the meteor play so far into the history, under its id, so that a later save replaces it.
+    @discardableResult
+    private func saveMeteorPlay() -> SessionSummary? {
+        guard let p = meteorPlay, !p.tally.isEmpty else { return nil }
+        let shown = p.shownSec + (p.since.map { CACurrentMediaTime() - $0 } ?? 0)
+        let s = p.tally.summary(id: p.id, childCode: p.childCode, start: p.start, durationSec: shown, byEye: p.byEye,
+                                calibrationErrorCm: p.calibrationErrorCm)
+        keep(s)
+        return s
+    }
+
+    /// The game screen closed: the play goes into the history, and back on the menu its summary shows.
+    private func finishMeteorPlay() {
+        let s = saveMeteorPlay()
+        meteorPlay = nil
+        if route == .menu { lastSummary = s }
+    }
+
+    /// Adds a play to the history, or replaces the one with its id, and writes the history to the phone.
+    private func keep(_ s: SessionSummary) {
+        if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s } else { sessions.append(s) }
+        SessionStore.save(sessions)
+    }
+
+    /// Deletes the plays of one child (every play when the code is empty) from the phone.
+    func deleteSessions(of code: String) {
+        let c = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        sessions.removeAll { c.isEmpty || $0.childCode == c }
+        SessionStore.save(sessions)
+    }
+
+    /// Debug builds only: launch argument `-SpantherDemoReport summary|history` fills the history with made-up plays
+    /// of two children and opens the report on the menu, for the CI screenshots. Nothing of it is saved.
+    #if DEBUG
+    let demoReport: String? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-SpantherDemoReport"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }()
+
+    private static func demoSessions() -> [SessionSummary] {
+        let now = Date(), day = 86_400.0
+        var out: [SessionSummary] = []
+        let meteors = [(14, 24, 1.12, 0.8, 2), (16, 25, 1.05, 0.7, 2), (17, 24, 0.98, 0.6, 3), (19, 26, 0.93, 0.6, 3),
+                       (21, 27, 0.86, 0.5, 4)]
+        for (k, m) in meteors.enumerated() {
+            var s = SessionSummary(id: "demo-m\(k)", childCode: "К-07", game: .meteors,
+                                   start: now.addingTimeInterval(-Double(4 - k) * day - 900), durationSec: 240 + 15 * Double(k),
+                                   byEye: true, calibrationErrorCm: [1.3, 1.2, 1.4, 1.1, 1.2][k])
+            s.burned = m.0
+            s.meteors = m.1
+            s.meanFirstLookSec = m.2
+            s.slipsPerMeteor = m.3
+            s.maxLevel = m.4
+            out.append(s)
+        }
+        for k in 0..<3 {
+            var s = SessionSummary(id: "demo-r\(k)", childCode: "К-07", game: .rhythm,
+                                   start: now.addingTimeInterval(-Double(4 - 2 * k) * day - 400), durationSec: 61,
+                                   byEye: true, calibrationErrorCm: 1.2)
+            s.track = "Орбита"
+            s.rhythmLevel = RhythmLevel.normal.rawValue
+            s.accuracy = 0.58 + 0.07 * Double(k)
+            s.notes = 61
+            s.hits = 41 + 4 * k
+            s.perfect = 17 + 3 * k
+            s.maxCombo = 9 + 3 * k
+            s.extraWinks = 7 - 2 * k
+            out.append(s)
+        }
+        for k in 0..<2 {
+            var s = SessionSummary(id: "demo-f\(k)", childCode: "К-12", game: .meteors,
+                                   start: now.addingTimeInterval(-Double(3 - k) * day), durationSec: 180,
+                                   byEye: false, calibrationErrorCm: nil)
+            s.burned = 18 + k
+            s.meteors = 22
+            s.meanFirstLookSec = 1.3 - 0.1 * Double(k)
+            s.slipsPerMeteor = 0.4
+            s.maxLevel = 2
+            out.append(s)
+        }
+        return out.sorted { $0.start < $1.start }
+    }
+    #endif
 }

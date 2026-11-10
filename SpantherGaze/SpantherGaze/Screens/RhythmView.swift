@@ -597,6 +597,7 @@ private struct RhythmResults: View {
                        : "Мимо из-за прицела: \(j.offTarget).")
         }
         if j.wrongEye > 0 { out.append("Не тем глазом: \(j.wrongEye).") }
+        if !app.currentChildCode.isEmpty { out.append("Игра сохранена в занятиях \(app.currentChildCode).") }
         return out
     }
 }
