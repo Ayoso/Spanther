@@ -249,15 +249,18 @@ public struct RhythmRules: Equatable, Sendable {
         self.acceptBlink = acceptBlink
     }
 
-    /// The rules for a level, with the hit zone grown by the calibration's measured error.
-    public static func level(_ l: RhythmLevel, measuredErrorPt: Double) -> RhythmRules {
+    /// The rules for a level, with the hit zone grown by the calibration's measured error. `scale` and
+    /// `zoneFloorPt`: «Мелкие цели», the zone times the scale but never under the floor (BalanceConfig.zoneFloor).
+    public static func level(_ l: RhythmLevel, measuredErrorPt: Double, scale: Double = 1,
+                             zoneFloorPt: Double = 0) -> RhythmRules {
         let base: Double
         switch l {
         case .easy: base = 90
         case .normal: base = 70
         case .hard: base = 55
         }
-        return RhythmRules(aimRadiusPt: base + max(0, min(measuredErrorPt, 90)), acceptBlink: l == .easy)
+        let zone = (base + max(0, min(measuredErrorPt, 90))) * min(1, max(0.4, scale))
+        return RhythmRules(aimRadiusPt: max(zone, zoneFloorPt), acceptBlink: l == .easy)
     }
 }
 
@@ -288,6 +291,13 @@ public struct RhythmJudge: Sendable {
     /// The last closure that landed in a note's window but could not play it, so the screen can say why at that
     /// note: a blink on a level that needs one eye, or the wrong eye on a side note.
     public private(set) var lastRejected: Rejected?
+    /// For each note a closure was judged against: the closure's time minus the note's (s) and the eye that
+    /// closed. Nil for notes no closure reached.
+    public private(set) var offsets: [Double?]
+    public private(set) var playedBy: [WinkSide?]
+    /// One-eye closures the judge has seen, per eye: the ones that played a note and the ones that did not.
+    public private(set) var closuresLeft = 0
+    public private(set) var closuresRight = 0
     private var first = 0
 
     public struct Rejected: Equatable, Sendable {
@@ -311,6 +321,8 @@ public struct RhythmJudge: Sendable {
         self.rules = rules
         self.latencySec = latencySec
         results = Array(repeating: nil, count: notes.count)
+        offsets = Array(repeating: nil, count: notes.count)
+        playedBy = Array(repeating: nil, count: notes.count)
     }
 
     /// The beat the next closure is judged against: the note's time plus the player's delay.
@@ -322,6 +334,7 @@ public struct RhythmJudge: Sendable {
     /// closure too. Otherwise the earliest such note is played. Returns the note it played, or nil when it played
     /// none.
     public mutating func closure(side: WinkSide, time: Double, aimDistance: (Int) -> Double?, prefer: Int? = nil) -> Hit? {
+        if side == .left { closuresLeft += 1 } else if side == .right { closuresRight += 1 }
         var i = first
         while i < notes.count, expected(i) < time - rules.okSec { i += 1 }
         // The open notes whose window holds the closure and whose eye matches: the preferred one, or the earliest.
@@ -360,6 +373,8 @@ public struct RhythmJudge: Sendable {
         let aimed = aimDistance(k).map { $0 <= rules.aimRadiusPt } ?? false
         let j: Judgement = !aimed ? .miss : d <= rules.perfectSec ? .perfect : d <= rules.goodSec ? .good : .ok
         record(k, j)
+        offsets[k] = offset
+        playedBy[k] = side
         if aimed {
             // Learn the delay slowly and within reason, so one odd wink does not move the windows.
             latencySec = min(0.3, max(-0.05, latencySec + 0.15 * (offset - latencySec)))
@@ -404,6 +419,42 @@ public struct RhythmJudge: Sendable {
 
     /// 0 to 3 stars for the results screen.
     public var stars: Int { accuracy >= 0.9 ? 3 : accuracy >= 0.75 ? 2 : accuracy >= 0.5 ? 1 : 0 }
+
+    /// Closure time minus note time (s) of every note that was played (perfect, good or ok), in note order.
+    public var playedOffsets: [Double] {
+        notes.indices.compactMap { i in
+            guard let r = results[i], r != .miss else { return nil }
+            return offsets[i]
+        }
+    }
+
+    /// How late the played notes were on average (s; negative: early). It holds the player's own delay and the
+    /// time the wink detector needs, so it says little by itself; the deviation below is measured from it.
+    public var meanOffsetSec: Double? {
+        let o = playedOffsets
+        return o.isEmpty ? nil : o.reduce(0, +) / Double(o.count)
+    }
+
+    /// How far the played notes were from the player's own mean lateness, on average (s): the steadiness of the
+    /// timing, free of a constant delay. Nil with fewer than two played notes.
+    public var timingDeviationSec: Double? {
+        let o = playedOffsets
+        guard o.count >= 2, let mean = meanOffsetSec else { return nil }
+        return o.reduce(0) { $0 + abs($1 - mean) } / Double(o.count)
+    }
+
+    /// Winks of one eye, and how many of them played a note (perfect, good or ok).
+    public func winks(_ side: WinkSide) -> (played: Int, all: Int) {
+        let all = side == .left ? closuresLeft : side == .right ? closuresRight : 0
+        let played = notes.indices.filter { playedBy[$0] == side && results[$0] != nil && results[$0] != .miss }.count
+        return (played, all)
+    }
+
+    /// Share of one eye's winks that played a note, 0...1; nil when that eye never winked.
+    public func winkAccuracy(_ side: WinkSide) -> Double? {
+        let w = winks(side)
+        return w.all > 0 ? Double(w.played) / Double(w.all) : nil
+    }
 }
 
 /// Small seeded generator (SplitMix64), so a track's notes are the same on every play.

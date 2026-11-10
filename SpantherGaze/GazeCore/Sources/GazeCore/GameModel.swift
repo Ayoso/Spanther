@@ -39,6 +39,32 @@ public struct AsteroidRecord: Sendable, Codable {
     public var destroyed: Bool
 }
 
+/// A red sign: it comes in like a meteor, does no harm and burns out at Earth by itself. The player is meant to
+/// pass it by; a look that rests on it for `DecoyConfig.errorDwellSec` is an error, and the sign fades.
+public struct Decoy: Sendable, Identifiable {
+    public let id: Int
+    public var position: Vec2
+    public var velocity: Vec2
+    /// Drawn radius, screen pt.
+    public let radius: Double
+    public let spawnTime: Double
+    /// Seconds the gaze has rested on it without leaving.
+    public var dwellSec = 0.0
+    public var isLookedAt = false
+    /// Game time at which the look that rests on it now began; nil while nobody looks at it.
+    public var lookStart: Double?
+}
+
+/// How one red sign ended, for the report and the session CSV.
+public struct DecoyRecord: Sendable, Codable, Equatable {
+    public var level: Int
+    public var lifetimeSec: Double
+    /// The gaze rested on it past the threshold: an error. False: it was passed by, as asked.
+    public var looked: Bool
+    /// Seconds from its appearance to the start of the look that became the error.
+    public var lookSec: Double?
+}
+
 public enum GameEvent: Sendable {
     case spawned(Asteroid)
     case destroyed(Asteroid, AsteroidRecord)
@@ -50,6 +76,11 @@ public enum GameEvent: Sendable {
     case energySpent(cost: Int, left: Int)
     /// The player is looking at an asteroid they cannot afford (true) or no longer is (false).
     case starved(Bool)
+    case decoySpawned(Decoy)
+    /// The gaze rested on a red sign past the threshold (an error): the sign leaves the play.
+    case decoyLooked(Decoy, DecoyRecord)
+    /// A red sign reached Earth without being looked at that long: it burns out by itself.
+    case decoyPassed(Decoy, DecoyRecord)
 }
 
 /// SplitMix64, so tests can replay a game exactly.
@@ -88,6 +119,13 @@ public final class GameModel {
     public private(set) var reloadsThisLevel = 0
     /// Hit-zone margin E (screen pt). Set from the check screen, or a small value in touch mode.
     public var marginPt: Double
+    /// «Мелкие цели»: drawn radii and hit zones times this (1: the BALANCE.md sizes).
+    public let targetScale: Double
+    /// With small targets, no hit zone is smaller than this (screen pt; `BalanceConfig.zoneFloor`).
+    public let zoneFloorPt: Double
+    /// The red signs to pass by (when the play has them and balance.json describes them).
+    public private(set) var decoys: [Decoy] = []
+    public let decoyConfig: DecoyConfig?
     public var time = 0.0
 
     public let earthCenter: Vec2
@@ -99,11 +137,19 @@ public final class GameModel {
     private var lostSince: Double?
     private var recentHits: [Double] = []
     private var killStreak = 0
+    private var decoyTimer = 0.0
 
-    public init(config: BalanceConfig, screen: Vec2, marginPt: Double, seed: UInt64 = UInt64(Date().timeIntervalSince1970)) {
+    /// `targetScale`: 1 for the BALANCE.md sizes, `config.smallTargetScale` for small targets, with `zoneFloorPt`
+    /// from `config.zoneFloor`. `decoys`: the play has red signs (if balance.json describes them).
+    public init(config: BalanceConfig, screen: Vec2, marginPt: Double, targetScale: Double = 1, zoneFloorPt: Double = 0,
+                decoys: Bool = false, seed: UInt64 = UInt64(Date().timeIntervalSince1970)) {
         self.config = config
         self.screen = screen
         self.marginPt = marginPt
+        self.targetScale = min(1, max(0.4, targetScale))
+        self.zoneFloorPt = max(0, zoneFloorPt)
+        decoyConfig = decoys ? config.decoys : nil
+        decoyTimer = config.decoys?.firstAfterSec ?? 0
         self.rng = SeededRandom(seed: seed)
         shields = config.earthShields
         // Earth is a low arc along the bottom edge through both bottom corners. Its top stands 15% of the screen
@@ -149,12 +195,18 @@ public final class GameModel {
         return s > 0 ? earthCenter.y - s.squareRoot() : earthCenter.y
     }
 
-    /// Distance of a point to an asteroid divided by the hit-zone radius (drawn radius + E). < 1 means inside.
-    public func zoneRatio(_ p: Vec2, _ a: Asteroid) -> Double { p.distance(to: a.position) / (a.radius + marginPt) }
+    /// Hit-zone radius (screen pt) of a target drawn with `radius`: the radius plus E, both at the target scale,
+    /// and with small targets never under the floor.
+    public func zone(radius: Double) -> Double { max(radius + marginPt * targetScale, zoneFloorPt) }
 
-    /// Advances the game by `dt` seconds and returns what happened.
+    /// Distance of a point to an asteroid divided by the hit-zone radius (drawn radius + E). < 1 means inside.
+    public func zoneRatio(_ p: Vec2, _ a: Asteroid) -> Double { p.distance(to: a.position) / zone(radius: a.radius) }
+
+    /// Advances the game by `dt` seconds and returns what happened. `held`: the gaze point is the one kept from
+    /// before an eyelid moved (a blink), not a fresh look. A meteor keeps burning under it; a red sign's look
+    /// neither grows nor ends, so a blink cannot turn a passing glance into an error.
     @discardableResult
-    public func update(dt: Double, gaze: GazeInput) -> [GameEvent] {
+    public func update(dt: Double, gaze: GazeInput, held: Bool = false) -> [GameEvent] {
         var events: [GameEvent] = []
         let dt = min(dt, 0.1)
 
@@ -179,11 +231,17 @@ public final class GameModel {
         // charging counts with a zone `lockZone` times wider, so the lock holds while the aim wobbles (second iPhone
         // session: small fast meteors in level 6 slipped out of the aim 4-5 times each).
         var targetIndex: Int?
+        // A red sign takes the look when it is the nearest thing to it: then no meteor is being looked at.
+        var lookedDecoy: Int?
         if let p = point {
             var best = 1.0
             for (i, a) in asteroids.enumerated() {
                 let r = zoneRatio(p, a) / (a.progress > 0 ? config.lockZone : 1)
                 if r < best { best = r; targetIndex = i }
+            }
+            for (i, s) in decoys.enumerated() {
+                let r = p.distance(to: s.position) / zone(radius: s.radius)
+                if r < best { best = r; lookedDecoy = i; targetIndex = nil }
             }
         }
 
@@ -262,6 +320,8 @@ public final class GameModel {
             i += 1
         }
 
+        updateDecoys(dt: dt, looked: lookedDecoy, hold: held || freezeProgress, into: &events)
+
         // Level end: stop spawning after levelLengthSec, finish when the sky is clear.
         if levelTime >= config.levelLengthSec {
             if asteroids.isEmpty {
@@ -288,6 +348,60 @@ public final class GameModel {
             spawnTimer = BalanceConfig.lerp(config.spawnIntervalSec, d)
         }
         return events
+    }
+
+    /// Moves the red signs, counts the look on the one the gaze rests on, and sends in the next one. They are not
+    /// part of a level: they keep flying when a level ends or restarts.
+    private func updateDecoys(dt: Double, looked: Int?, hold: Bool, into events: inout [GameEvent]) {
+        guard let cfg = decoyConfig else { return }
+        var i = 0
+        while i < decoys.count {
+            var s = decoys[i]
+            s.isLookedAt = i == looked
+            if s.isLookedAt {
+                if !hold {
+                    if s.lookStart == nil { s.lookStart = time - dt }
+                    s.dwellSec += dt
+                }
+            } else if !hold {
+                s.dwellSec = 0
+                s.lookStart = nil
+            }
+            s.position = s.position + s.velocity * dt
+            if s.dwellSec >= cfg.errorDwellSec {
+                decoys.remove(at: i)
+                events.append(.decoyLooked(s, DecoyRecord(level: level, lifetimeSec: time - s.spawnTime, looked: true,
+                                                          lookSec: max(0, (s.lookStart ?? time) - s.spawnTime))))
+                continue
+            }
+            if s.position.distance(to: earthCenter) < earthRadius + s.radius * 0.3 {
+                decoys.remove(at: i)
+                events.append(.decoyPassed(s, DecoyRecord(level: level, lifetimeSec: time - s.spawnTime, looked: false,
+                                                          lookSec: nil)))
+                continue
+            }
+            decoys[i] = s
+            i += 1
+        }
+        decoyTimer -= dt
+        if decoyTimer <= 0, decoys.count < max(1, cfg.maxOnScreen) {
+            let s = spawnDecoy()
+            decoys.append(s)
+            events.append(.decoySpawned(s))
+            decoyTimer = BalanceConfig.lerp(cfg.intervalSec, d) * Double.random(in: 0.8...1.2, using: &rng)
+        }
+    }
+
+    /// A red sign at one of the meteors' edges, aimed at Earth like them.
+    public func spawnDecoy() -> Decoy {
+        let cfg = decoyConfig ?? config.decoys ?? DecoyConfig()
+        let r = cfg.sizePt / 2 * targetScale
+        let (start, aimX) = entry(radius: r)
+        let aim = Vec2(aimX, earthSurfaceY(atX: aimX))
+        let v = (aim - start) * (1 / max(0.1, BalanceConfig.lerp(cfg.travelSec, d)))
+        let s = Decoy(id: nextId, position: start, velocity: v, radius: r, spawnTime: time)
+        nextId += 1
+        return s
     }
 
     private func restartLevel(keepShields: Bool = false) {
@@ -323,7 +437,7 @@ public final class GameModel {
             }
         }
         let cls = config.classes[name] ?? config.classes["S"]!
-        let r = cls.sizePt / 2
+        let r = cls.sizePt / 2 * targetScale
         let (start, aimX) = entry(radius: r)
         let aim = Vec2(aimX, earthSurfaceY(atX: aimX))
         let path = aim - start
@@ -357,12 +471,15 @@ public final class GameModel {
         case .top:
             let x = spaced(r, w - r) { x in
                 self.asteroids.contains { $0.position.y < h * 0.35 && abs($0.position.x - x) < 2 * self.marginPt }
+                    || self.decoys.contains { $0.position.y < h * 0.35 && abs($0.position.x - x) < 2 * self.marginPt }
             }
             return (Vec2(x, -r), earthCenter.x + (x - earthCenter.x) * 0.5)
         case .left, .right:
             let left = edge == .left
             let y = spaced(min(r, h * 0.1), h * 0.45) { y in
                 self.asteroids.contains {
+                    (left ? $0.position.x < w * 0.25 : $0.position.x > w * 0.75) && abs($0.position.y - y) < 2 * self.marginPt
+                } || self.decoys.contains {
                     (left ? $0.position.x < w * 0.25 : $0.position.x > w * 0.75) && abs($0.position.y - y) < 2 * self.marginPt
                 }
             }
@@ -373,5 +490,6 @@ public final class GameModel {
 
     /// Test and debug hook: put an asteroid somewhere specific.
     public func insert(_ a: Asteroid) { asteroids.append(a) }
+    public func insert(_ s: Decoy) { decoys.append(s) }
     public func removeAll() { asteroids.removeAll() }
 }
