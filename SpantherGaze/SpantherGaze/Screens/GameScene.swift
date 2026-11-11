@@ -17,6 +17,11 @@ final class GameHUD: ObservableObject {
     @Published var reloadNeeded = 3
     /// Bumped on every reload so the HUD can pulse.
     @Published var reloadCount = 0
+    /// A quiet line under the top row («На красный знак не смотрим»); it fades in and out, nothing flashes.
+    @Published var notice: String?
+    /// Red signs that have left the play, and how many of them the player looked at. Shown on the pause plate.
+    @Published var decoys = 0
+    @Published var decoyErrors = 0
 }
 
 /// Draws GameModel in the atlas look: ink on paper, over the living garden (the scene is transparent and
@@ -39,6 +44,16 @@ final class GameScene: SKScene {
     /// Eye mode: the centre of the meteor taken as looked at on this frame (screen pt), or nil. The aim adapter
     /// learns from it.
     var onLookedAt: ((Vec2?) -> Void)?
+    /// «Мелкие цели»: the scale of the meteors, the red signs and their hit zones, and the smallest zone it may
+    /// give (screen pt). From AppModel.targetScale and zoneFloorPt.
+    var targetScale = 1.0
+    var zoneFloorPt = 0.0
+    /// The play has red signs to pass by.
+    var decoysOn = false
+    /// Eye mode: the gaze point is the one kept from before a blink (AppModel.gazeHeld).
+    var gazeHeld: () -> Bool = { false }
+    /// A red sign left the play (looked at or passed by), with where it was (screen pt).
+    var onDecoy: ((DecoyRecord, Vec2) -> Void)?
     let hud = GameHUD()
     var paused_ = false
     /// Draw the aim (debugging only): a cursor a little off where the player looks pulls the eyes after it.
@@ -47,6 +62,9 @@ final class GameScene: SKScene {
     private(set) var model: GameModel?
     private let world = SKNode()
     private var rocks: [Int: RockNode] = [:]
+    private var signs: [Int: DecoyNode] = [:]
+    /// Red signs sent in so far: the first one comes with a line that says what to do.
+    private var signsSeen = 0
     private let reticle = SKShapeNode(circleOfRadius: 14)
     private static let reticleColor = Atlas.UI.ink.withAlphaComponent(0.7)
     private static let reticleStarvedColor = Atlas.UI.vermilion
@@ -60,6 +78,9 @@ final class GameScene: SKScene {
     #if DEBUG
     /// Bot for the Simulator smoke test (see AppModel.autoplay).
     var autoplay = false
+    /// The bot leaves for the menu after this many seconds of play, so the run also shows the summary. Nil: stays.
+    var botQuitAfter: Double?
+    var botQuit: (() -> Void)?
     private var botDrySince: Double?
     private var botNextPress = 0.0
     private var botBlinks = 0
@@ -78,7 +99,10 @@ final class GameScene: SKScene {
     func start() {
         world.removeAllChildren()
         rocks.removeAll()
-        let m = GameModel(config: config, screen: Vec2(size.width, size.height), marginPt: marginPt)
+        signs.removeAll()
+        signsSeen = 0
+        let m = GameModel(config: config, screen: Vec2(size.width, size.height), marginPt: marginPt,
+                          targetScale: targetScale, zoneFloorPt: zoneFloorPt, decoys: decoysOn)
         model = m
         // Earth: only the cap that shows above the bottom edge, engraved like a globe on an old chart. In landscape
         // the whole circle would be about 3,100 pt across.
@@ -190,13 +214,32 @@ final class GameScene: SKScene {
             }
         }
         let gaze: GazeInput = botGaze ?? (useTouch ? (touchPoint.map { .point($0) } ?? .notLooking) : gazeSource())
+        let held = botGaze == nil && !useTouch && gazeHeld()
 
-        for e in m.update(dt: dt, gaze: gaze) {
+        for e in m.update(dt: dt, gaze: gaze, held: held) {
             switch e {
             case .spawned(let a):
-                let n = RockNode(a)
+                let n = RockNode(a, scale: CGFloat(m.targetScale))
                 rocks[a.id] = n
                 world.addChild(n)
+            case .decoySpawned(let s):
+                let n = DecoyNode(s)
+                n.position = sk(s.position)
+                signs[s.id] = n
+                world.addChild(n)
+                signsSeen += 1
+                if signsSeen == 1 { notice(useTouch ? "Красный знак не трогаем" : "На красный знак не смотрим", seconds: 4) }
+            case .decoyLooked(let s, let rec):
+                // An error, said quietly: the sign fades and a line reminds the rule. No flash, no shake, no buzz.
+                signs.removeValue(forKey: s.id)?.leave(seconds: 0.7)
+                hud.decoys += 1
+                hud.decoyErrors += 1
+                notice(useTouch ? "Красный знак не трогаем" : "На красный знак не смотрим", seconds: 2.5)
+                onDecoy?(rec, s.position)
+            case .decoyPassed(let s, let rec):
+                signs.removeValue(forKey: s.id)?.leave(seconds: 0.4)
+                hud.decoys += 1
+                onDecoy?(rec, s.position)
             case .destroyed(let a, let rec):
                 explode(at: sk(a.position), radius: CGFloat(a.radius))
                 rocks.removeValue(forKey: a.id)?.removeFromParent()
@@ -230,6 +273,7 @@ final class GameScene: SKScene {
         }
 
         for a in m.asteroids { rocks[a.id]?.sync(a, at: sk(a.position)) }
+        for s in m.decoys { signs[s.id]?.position = sk(s.position) }
         if !useTouch, botGaze == nil { onLookedAt?(m.asteroids.first { $0.isTargeted }?.position) }
         if hud.needsReload != m.needsReload { hud.needsReload = m.needsReload }
 
@@ -253,6 +297,16 @@ final class GameScene: SKScene {
     /// Looks at the lowest meteor, even one it cannot afford (so the red ring and hint show). Two seconds
     /// after running dry it "blinks" (eyes) or taps the energy bar (touch) every 0.4 s until it reloads.
     private func botStep(_ m: GameModel) -> GazeInput {
+        if let after = botQuitAfter, m.time > after {
+            botQuitAfter = nil
+            botQuit?()
+        }
+        // Every third red sign catches the bot's eye once it is well into view, so a run has both kinds: signs
+        // looked at and signs passed by.
+        if signsSeen % 3 == 2, let s = m.decoys.first, s.position.y > m.screen.y * 0.2, s.position.x > 0, s.position.x < m.screen.x {
+            touchPoint = useTouch ? s.position : nil
+            return .point(s.position)
+        }
         // Like a player: reacts once a meteor is well into view (a third of the way down), then follows the lowest.
         let target = m.asteroids.filter { $0.position.y > m.screen.y * 0.33 }.max { $0.position.y < $1.position.y }
         if m.needsReload {
@@ -281,6 +335,19 @@ final class GameScene: SKScene {
         hud.banner = s
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
             if self?.hud.banner == s { self?.hud.banner = nil }
+        }
+    }
+
+    /// How many quiet lines have been shown: a line is taken away only if no newer one has replaced it.
+    private var noticeCount = 0
+
+    /// Shows the quiet line under the top row for a few seconds (the HUD fades it in and out).
+    private func notice(_ s: String, seconds: Double) {
+        noticeCount += 1
+        let mine = noticeCount
+        hud.notice = s
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            if self?.noticeCount == mine { self?.hud.notice = nil }
         }
     }
 
@@ -366,13 +433,18 @@ final class RockNode: SKNode {
     private let lamp: SKShapeNode
     private let cracks = SKShapeNode()
     private let radius: CGFloat
+    /// How far the dial sits outside the rock (pt).
+    private let dialGap: CGFloat
 
     private static let paperRGB: (CGFloat, CGFloat, CGFloat) = (0.906, 0.875, 0.820)
     private static let hotRGB: (CGFloat, CGFloat, CGFloat) = (0.761, 0.271, 0.176)
 
-    init(_ a: Asteroid) {
+    /// `scale`: «Мелкие цели». The rock's radius already has it; the dial, the mark and the light round it shrink
+    /// by it too, so the whole meteor is that much smaller, not only its body.
+    init(_ a: Asteroid, scale k: CGFloat = 1) {
         let radius = CGFloat(a.radius)
         self.radius = radius
+        dialGap = 10 * k
         let path = CGMutablePath()
         let n = 11
         for i in 0..<n {
@@ -385,11 +457,12 @@ final class RockNode: SKNode {
         body = SKShapeNode(path: path)
         body.strokeColor = Atlas.UI.ink.withAlphaComponent(0.9)
         body.lineWidth = 1.6
-        track = SKShapeNode(circleOfRadius: radius + 10)
-        starvedRing = SKShapeNode(path: CGPath(ellipseIn: CGRect(x: -radius - 10, y: -radius - 10, width: 2 * radius + 20,
-                                                                height: 2 * radius + 20), transform: nil)
+        let dial = radius + 10 * k
+        track = SKShapeNode(circleOfRadius: dial)
+        starvedRing = SKShapeNode(path: CGPath(ellipseIn: CGRect(x: -dial, y: -dial, width: 2 * dial, height: 2 * dial),
+                                               transform: nil)
             .copy(dashingWithPhase: 0, lengths: [5, 5]))
-        lamp = SKShapeNode(circleOfRadius: radius + 18)
+        lamp = SKShapeNode(circleOfRadius: radius + 18 * k)
         super.init()
         lamp.fillColor = Atlas.UI.vermilion.withAlphaComponent(0.13)
         lamp.strokeColor = .clear
@@ -404,8 +477,8 @@ final class RockNode: SKNode {
         ring.lineWidth = 2.5
         ring.lineCap = .round
         let mp = CGMutablePath()
-        mp.move(to: CGPoint(x: 0, y: radius + 4))
-        mp.addLine(to: CGPoint(x: 0, y: radius + 16))
+        mp.move(to: CGPoint(x: 0, y: radius + 4 * k))
+        mp.addLine(to: CGPoint(x: 0, y: radius + 16 * k))
         mark.path = mp
         mark.strokeColor = Atlas.UI.vermilion
         mark.lineWidth = 3
@@ -466,12 +539,42 @@ final class RockNode: SKNode {
         if t > 0 {
             // SpriteKit is y up: from 12 o'clock clockwise as the player sees it.
             let path = CGMutablePath()
-            path.addArc(center: .zero, radius: radius + 10, startAngle: .pi / 2, endAngle: .pi / 2 - t * 2 * .pi, clockwise: true)
+            path.addArc(center: .zero, radius: radius + dialGap, startAngle: .pi / 2, endAngle: .pi / 2 - t * 2 * .pi, clockwise: true)
             ring.path = path
             if t > 0.3 { body.position = CGPoint(x: CGFloat.random(in: -1...1) * t * 2, y: CGFloat.random(in: -1...1) * t * 2) }
         } else {
             ring.path = nil
             body.position = .zero
         }
+    }
+}
+
+/// A red sign in the atlas look: a flat vermilion disc with a bar of paper across it, the "no entry" of road signs,
+/// so it reads by its shape as well as by its colour. It drifts in like a meteor and is meant to be passed by.
+/// Nothing on it moves or blinks: it appears and leaves by fading.
+final class DecoyNode: SKNode {
+    init(_ s: Decoy) {
+        let r = CGFloat(s.radius)
+        let disc = SKShapeNode(circleOfRadius: r)
+        disc.fillColor = Atlas.UI.vermilion
+        disc.strokeColor = Atlas.UI.ink.withAlphaComponent(0.55)
+        disc.lineWidth = 1.2
+        let bar = SKShapeNode(rectOf: CGSize(width: r * 1.15, height: r * 0.32), cornerRadius: r * 0.08)
+        bar.fillColor = Atlas.UI.paper
+        bar.strokeColor = .clear
+        super.init()
+        addChild(disc)
+        addChild(bar)
+        zPosition = 9
+        alpha = 0
+        run(.fadeIn(withDuration: 0.5))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Fades away where it is.
+    func leave(seconds: Double) {
+        removeAllActions()
+        run(.sequence([.group([.fadeOut(withDuration: seconds), .scale(to: 0.85, duration: seconds)]), .removeFromParent()]))
     }
 }

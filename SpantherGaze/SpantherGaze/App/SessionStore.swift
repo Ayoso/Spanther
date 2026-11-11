@@ -26,8 +26,22 @@ enum SessionStore {
         let day = DateFormatter()
         day.locale = Locale(identifier: "en_US_POSIX")
         day.dateFormat = "yyyy-MM-dd"
+        return write(sessions, name: "spanther-sessions-\(day.string(from: Date())).csv")
+    }
+
+    /// The table of one play, for the Share button on its summary: the same columns as the table of all plays (the
+    /// date and time, the game, how it was played, the four numbers of the report and the game's own results) and
+    /// one row. Named by the game and the time the play started.
+    static func exportCSV(play s: SessionSummary) -> URL? {
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.dateFormat = "yyyy-MM-dd-HHmm"
+        return write([s], name: "spanther-\(s.game.rawValue)-\(stamp.string(from: s.start)).csv")
+    }
+
+    private static func write(_ sessions: [SessionSummary], name: String) -> URL? {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("report", isDirectory: true)
-        let url = dir.appendingPathComponent("spanther-sessions-\(day.string(from: Date())).csv")
+        let url = dir.appendingPathComponent(name)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try (Data("\u{FEFF}".utf8) + Data(SessionHistory.csv(sessions).utf8)).write(to: url, options: .atomic)

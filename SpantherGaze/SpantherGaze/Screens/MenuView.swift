@@ -1,12 +1,16 @@
 import QuartzCore
 import SwiftUI
 
-/// The main menu in the atlas look: the mark and the two games on the left, the switches on the right, the living
-/// garden behind (RootView draws it).
+/// The main menu in the atlas look: the mark, the child's sessions and the settings in the top row, the three games
+/// side by side under it, the living garden behind (RootView draws it). The switches live in a sheet behind the
+/// gear, so the games keep the whole screen.
 struct MenuView: View {
     @EnvironmentObject var app: AppModel
-    /// The report sheet: the summary of the meteor play that just ended, or the child's history.
+    /// The report sheet: the summary of the play that just ended, or the child's history.
     @State private var report: ReportPage?
+    @State private var showSettings = false
+    /// The wink test was asked for in the settings: it opens once their sheet has closed.
+    @State private var winkTestAsked = false
 
     var body: some View {
         // The smallest screens (iPhone SE, 4.7") cannot fit the whole menu with a warning on it: there it
@@ -16,11 +20,23 @@ struct MenuView: View {
             ScrollView { content }
         }
         .sheet(item: $report) { page in ReportSheet(page: page).environmentObject(app) }
+        .sheet(isPresented: $showSettings, onDismiss: {
+            guard winkTestAsked else { return }
+            winkTestAsked = false
+            app.beginWinkTest()
+        }) {
+            SettingsSheet(onWinkTest: {
+                winkTestAsked = true
+                showSettings = false
+            })
+            .environmentObject(app)
+        }
         .onAppear {
-            // After the game screen closes: the sheet waits for the menu to be on screen.
+            // After a play ends: the sheet waits for the menu to be on screen.
             DispatchQueue.main.async { showLastSummary() }
             #if DEBUG
             if app.demoReport == "history" { DispatchQueue.main.async { report = .history } }
+            if app.demoReport == "settings" { DispatchQueue.main.async { showSettings = true } }
             #endif
         }
         .onChange(of: app.lastSummary) { _ in showLastSummary() }
@@ -33,16 +49,17 @@ struct MenuView: View {
     }
 
     private var content: some View {
-        HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 12) {
-                header
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            // Three plates of one height: the tallest text sets it, and the buttons line up along the bottom.
+            HStack(alignment: .top, spacing: 12) {
                 meteorPlate
                 rhythmPlate
-                warnings
+                pursuitPlate
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            settings
-                .frame(width: 270)
+            .fixedSize(horizontal: false, vertical: true)
+            warnings
+            footer
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -70,6 +87,15 @@ struct MenuView: View {
                 sessionsButton(withTitle: false)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Atlas.ink)
+                    .frame(width: 44, height: 44)
+                    .background(Atlas.paper.opacity(0.88), in: Capsule())
+                    .overlay(Capsule().stroke(Atlas.ink.opacity(0.14), lineWidth: 1))
+            }
+            .accessibilityLabel("Настройки")
         }
     }
 
@@ -91,58 +117,81 @@ struct MenuView: View {
         .accessibilityLabel(code.isEmpty ? "Занятия" : "Занятия ребёнка \(code)")
     }
 
-    private var meteorPlate: some View {
-        HStack(alignment: .center, spacing: 16) {
-            MeteorVignette()
-                .frame(width: 64, height: 64)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Метеориты").font(Atlas.title).foregroundStyle(Atlas.ink)
-                    Text("Держи взгляд на метеорите, пока он не сгорит. Кончилась энергия? Моргни 3\u{00A0}раза.")
-                        .font(Atlas.caption)
-                        .foregroundStyle(Atlas.inkSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 8) {
-                    Button {
-                        app.mode = .eyes
-                        app.beginCalibration()
-                    } label: { Text("Играть глазами") }
-                        .buttonStyle(AtlasPrimaryButton())
-                        .disabled(!app.eyeTrackingSupported)
-                    Button {
-                        app.mode = .touch
-                        app.route = .game
-                    } label: { Image(systemName: "hand.point.up.left") }
-                        .buttonStyle(AtlasSecondaryButton())
-                        .frame(width: 56)
-                        .accessibilityLabel("Играть пальцем")
-                }
+    /// One game: its small moving picture and name, what to do in a sentence or two, and its buttons at the bottom.
+    private func plate<Art: View, Actions: View>(_ title: String, _ text: String, @ViewBuilder art: () -> Art,
+                                                 @ViewBuilder actions: () -> Actions) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                art()
+                    .frame(width: 48, height: 48)
+                    .accessibilityHidden(true)
+                Text(title).font(Atlas.title).foregroundStyle(Atlas.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
+            Text(text)
+                .font(Atlas.caption)
+                .foregroundStyle(Atlas.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            HStack(spacing: 8) { actions() }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .atlasPlate(padding: 12)
     }
 
+    /// A button's words on one line; they shrink a little on a narrow plate instead of breaking.
+    private func buttonText(_ s: String) -> some View {
+        Text(s).lineLimit(1).minimumScaleFactor(0.75).padding(.horizontal, 6)
+    }
+
+    /// The small square button that plays the same game by finger.
+    private func fingerButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: "hand.point.up.left") }
+            .buttonStyle(AtlasSecondaryButton())
+            .frame(width: 48)
+            .accessibilityLabel(label)
+    }
+
+    private var meteorPlate: some View {
+        plate("Метеориты",
+              app.decoysOn
+              ? "Держи взгляд на метеорите, пока он не сгорит. Красные знаки пропускай. Кончилась энергия? Моргни 3\u{00A0}раза."
+              : "Держи взгляд на метеорите, пока он не сгорит. Кончилась энергия? Моргни 3\u{00A0}раза.",
+              art: { MeteorVignette() },
+              actions: {
+                  Button {
+                      app.mode = .eyes
+                      app.beginCalibration()
+                  } label: { buttonText("Играть глазами") }
+                      .buttonStyle(AtlasPrimaryButton())
+                      .disabled(!app.eyeTrackingSupported)
+                  fingerButton("Играть пальцем") {
+                      app.mode = .touch
+                      app.route = .game
+                  }
+              })
+    }
+
     private var rhythmPlate: some View {
-        HStack(alignment: .center, spacing: 16) {
-            NoteVignette()
-                .frame(width: 64, height: 64)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Ритм").font(Atlas.title).foregroundStyle(Atlas.ink)
-                    Text("Смотри на звезду и подмигивай, когда стрелка дойдёт до метки.")
-                        .font(Atlas.caption)
-                        .foregroundStyle(Atlas.inkSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button { app.openRhythm() } label: { Text("Выбрать трек") }
-                    .buttonStyle(AtlasPrimaryButton())
-                    .disabled(app.rhythmTracks.isEmpty)
-            }
-        }
-        .atlasPlate(padding: 12)
+        plate("Ритм", "Смотри на звезду и подмигивай, когда стрелка дойдёт до метки.",
+              art: { NoteVignette() },
+              actions: {
+                  Button { app.openRhythm() } label: { buttonText("Выбрать трек") }
+                      .buttonStyle(AtlasPrimaryButton())
+                      .disabled(app.rhythmTracks.isEmpty)
+              })
+    }
+
+    private var pursuitPlate: some View {
+        plate("Разминка", "Минута для глаз: следи за точкой, пока она плывёт по экрану.",
+              art: { PursuitVignette() },
+              actions: {
+                  Button { app.openPursuit(byEye: true) } label: { buttonText("Начать") }
+                      .buttonStyle(AtlasPrimaryButton())
+                      .disabled(!app.eyeTrackingSupported)
+                  fingerButton("Разминка пальцем") { app.openPursuit(byEye: false) }
+              })
     }
 
     @ViewBuilder private var warnings: some View {
@@ -170,38 +219,102 @@ struct MenuView: View {
     static let privacyPolicyURL = URL(string:
         "https://doc-hosting.flycricket.io/spanther-privacy-policy/117739f5-0c00-4d4e-ac2e-ec17666ddb66/privacy")!
 
-    private var settings: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Настройки")
-                .font(Atlas.caption.weight(.semibold))
-                .foregroundStyle(Atlas.inkSoft)
-                .textCase(.uppercase)
-                .padding(.bottom, 4)
-            setting("Ночное зрение", "Для тёмной комнаты: экран подсвечивает лицо на полной яркости.", $app.nightVision, divider: true)
-            setting("Зрачки через Vision", app.nightVision ? "Выключены ночным зрением." : "Точнее при хорошем свете.",
-                    $app.usePupils, divider: true)
-                .disabled(app.nightVision)
-            setting("Подстройка под наклон", "Прицел держится, если наклонить телефон.", $app.adaptAim, divider: true)
-            setting("Отладка", "Цифры трекинга и точка взгляда.", $app.showDebug, divider: false)
-            HStack(spacing: 16) {
-                Button { app.beginWinkTest() } label: { Label("Тест подмигиваний", systemImage: "eye.slash") }
-                    .disabled(!app.eyeTrackingSupported)
-                ShareLink(item: app.logURL) { Label("CSV", systemImage: "square.and.arrow.up") }
-                    .accessibilityLabel("Экспорт CSV последней сессии")
-            }
-            .font(Atlas.caption.weight(.semibold))
-            .foregroundStyle(Atlas.ink)
-            .frame(minHeight: 44)
+    private var footer: some View {
+        HStack(spacing: 12) {
             Text("Изображение с камеры остаётся на телефоне.")
                 .font(Atlas.caption)
                 .foregroundStyle(Atlas.inkSoft)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 8)
             // App Review 5.1.1: the privacy policy must be reachable inside the app, not only on the store page.
             Link("Политика конфиденциальности", destination: Self.privacyPolicyURL)
                 .font(Atlas.caption.weight(.semibold))
                 .foregroundStyle(Atlas.ink)
-                .frame(minHeight: 44, alignment: .leading)
+                .frame(minHeight: 44)
         }
+    }
+}
+
+/// The switches, in a sheet behind the menu's gear: what the games are like on the left, the camera and the gaze
+/// on the right, the tools under them.
+private struct SettingsSheet: View {
+    @EnvironmentObject var app: AppModel
+    @Environment(\.dismiss) private var dismiss
+    /// Asks the menu to open the wink test once this sheet has closed.
+    let onWinkTest: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Text("Настройки").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
+                Spacer()
+                Button { dismiss() } label: { Text("Готово") }
+                    .buttonStyle(AtlasPrimaryButton())
+                    .frame(width: 130)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 24) {
+                        column("Игры") {
+                            setting("Мелкие цели", smallTargetsHint, $app.smallTargets, divider: true)
+                            setting("Красные знаки", "В метеоритах летят знаки, на которые нельзя смотреть. Ошибки считаются.",
+                                    $app.decoysOn, divider: true)
+                            setting("Музыка в метеоритах", "Тихий фон без ударных. Кнопка звука есть и в самой игре.",
+                                    $app.musicOn, divider: false)
+                        }
+                        column("Камера и взгляд") {
+                            setting("Ночное зрение", "Для тёмной комнаты: экран подсвечивает лицо на полной яркости.",
+                                    $app.nightVision, divider: true)
+                            setting("Зрачки через Vision", app.nightVision ? "Выключены ночным зрением." : "Точнее при хорошем свете.",
+                                    $app.usePupils, divider: true)
+                                .disabled(app.nightVision)
+                            setting("Подстройка под наклон", "Прицел держится, если наклонить телефон.", $app.adaptAim, divider: true)
+                            setting("Отладка", "Цифры трекинга и точка взгляда.", $app.showDebug, divider: false)
+                        }
+                    }
+                    HStack(spacing: 20) {
+                        Button(action: onWinkTest) { Label("Тест подмигиваний", systemImage: "eye.slash") }
+                            .disabled(!app.eyeTrackingSupported)
+                        ShareLink(item: app.logURL) { Label("CSV последней сессии", systemImage: "square.and.arrow.up") }
+                            .accessibilityLabel("Экспорт CSV последней сессии")
+                        Spacer(minLength: 0)
+                    }
+                    .font(Atlas.caption.weight(.semibold))
+                    .foregroundStyle(Atlas.ink)
+                    .frame(minHeight: 44)
+                    Text("Изображение с камеры остаётся на телефоне. Таблицы и CSV уходят с него только через кнопку «Поделиться».")
+                        .font(Atlas.caption)
+                        .foregroundStyle(Atlas.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.bottom, 12)
+            }
+        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Atlas.paper.ignoresSafeArea())
+        .environment(\.colorScheme, .light)
+    }
+
+    /// «на 30% меньше», with the share from balance.json, and the floor under the hit zone.
+    private var smallTargetsHint: String {
+        let percent = Int(((1 - app.balance.smallTargetScale) * 100).rounded())
+        let floor = SessionHistory.number(app.balance.zoneFloorFactor, 2)
+        return "Метеориты, звёзды и зоны попадания на \(percent)% меньше. Зона не меньше \(floor) промаха калибровки."
+    }
+
+    private func column<Rows: View>(_ title: String, @ViewBuilder rows: () -> Rows) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(Atlas.caption.weight(.semibold))
+                .foregroundStyle(Atlas.inkSoft)
+                .textCase(.uppercase)
+                .padding(.bottom, 4)
+            rows()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .atlasPlate(padding: 12)
     }
 
@@ -272,7 +385,8 @@ private struct MeteorVignette: View {
                     let k = (t - 2.4) / (cycle - 2.4)
                     var gg = g
                     gg.opacity = 1 - k
-                    let rr = r + 8 + 14 * k
+                    // The ring grows to the edge of the picture, whatever its size.
+                    let rr = r + 8 + max(2, min(size.width, size.height) / 2 - r - 9) * CGFloat(k)
                     gg.stroke(Path(ellipseIn: CGRect(x: c.x - rr, y: c.y - rr, width: 2 * rr, height: 2 * rr)),
                               with: .color(Atlas.vermilion), lineWidth: 2)
                     for s in 0..<4 {
@@ -297,7 +411,7 @@ private struct NoteVignette: View {
                 let r: CGFloat = min(size.width, size.height) * 0.2, dialR = r + 9
                 let hit = a < 0.18 ? 1 - a / 0.18 : 0
                 if hit > 0 {
-                    let rr = dialR + CGFloat(10 * (1 - hit))
+                    let rr = dialR + max(2, min(size.width, size.height) / 2 - dialR - 1) * CGFloat(1 - hit)
                     g.stroke(Path(ellipseIn: CGRect(x: c.x - rr, y: c.y - rr, width: 2 * rr, height: 2 * rr)),
                              with: .color(Atlas.vermilion.opacity(hit)), lineWidth: 2)
                 }
@@ -310,6 +424,33 @@ private struct NoteVignette: View {
                 mark.addLine(to: CGPoint(x: c.x, y: c.y - dialR + 5))
                 g.stroke(mark, with: .color(Atlas.vermilion), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 g.fill(Atlas.star(c, r * CGFloat(1 + 0.18 * hit)), with: .color(Atlas.ink))
+            }
+        }
+    }
+}
+
+/// The warm-up on the menu: a dot gliding along a figure of eight, as it does in the last part of the minute.
+private struct PursuitVignette: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            let now = CACurrentMediaTime()
+            Canvas { g, size in
+                let c = CGPoint(x: size.width / 2, y: size.height / 2)
+                let rx = size.width * 0.4, ry = size.height * 0.24
+                // The eight: once across while twice up and down.
+                func at(_ a: Double) -> CGPoint {
+                    let dx: Double = sin(a), dy: Double = sin(2 * a)
+                    return CGPoint(x: c.x + rx * CGFloat(dx), y: c.y + ry * CGFloat(dy))
+                }
+                var eight = Path()
+                for k in 0...48 {
+                    let p = at(2 * Double.pi * Double(k) / 48)
+                    if k == 0 { eight.move(to: p) } else { eight.addLine(to: p) }
+                }
+                g.stroke(eight, with: .color(Atlas.ink.opacity(0.25)), lineWidth: 1.5)
+                let p = at(2 * Double.pi * now.truncatingRemainder(dividingBy: 6) / 6)
+                g.stroke(Atlas.dial(p, 8, 1), with: .color(Atlas.ink.opacity(0.14)), lineWidth: 1.5)
+                g.fill(Path(ellipseIn: CGRect(x: p.x - 4.5, y: p.y - 4.5, width: 9, height: 9)), with: .color(Atlas.vermilion))
             }
         }
     }

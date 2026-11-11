@@ -311,7 +311,11 @@ private struct RhythmPlayView: View {
         .allowsHitTesting(false)
     }
 
-    private func noteRadius(_ l: RhythmLevel) -> CGFloat { l == .easy ? 20 : l == .normal ? 18 : 16 }
+    /// «Мелкие цели»: the scale of the stars, their dials and marks (1: the regular size).
+    private var scale: CGFloat { CGFloat(session.targetScale) }
+
+    /// A star's radius on a level (pt), with the target scale in it.
+    private func noteRadius(_ l: RhythmLevel) -> CGFloat { (l == .easy ? 20 : l == .normal ? 18 : 16) * scale }
 
     private func draw(_ g: inout GraphicsContext, _ size: CGSize, _ host: Double) {
         let s = session
@@ -327,7 +331,7 @@ private struct RhythmPlayView: View {
             return
         }
         let lead = s.level.leadSec
-        let r = noteRadius(s.level), dialR = r + 12
+        let r = noteRadius(s.level), dialR = r + 12 * scale
         let next = s.nextOpen(after: t)
 
         // The constellation so far: lines between notes hit one after the other, under everything else.
@@ -371,8 +375,8 @@ private struct RhythmPlayView: View {
             let tip = Atlas.polar(p, dialR, ang)
             gg.fill(Path(ellipseIn: CGRect(x: tip.x - 3.5, y: tip.y - 3.5, width: 7, height: 7)), with: .color(Atlas.ink))
             var mark = Path()
-            mark.move(to: CGPoint(x: p.x, y: p.y - dialR - 6))
-            mark.addLine(to: CGPoint(x: p.x, y: p.y - dialR + 6))
+            mark.move(to: CGPoint(x: p.x, y: p.y - dialR - 6 * scale))
+            mark.addLine(to: CGPoint(x: p.x, y: p.y - dialR + 6 * scale))
             gg.stroke(mark, with: .color(Atlas.vermilion), style: StrokeStyle(lineWidth: 3, lineCap: .round))
             gg.fill(Atlas.star(p, r * CGFloat(1 + 0.15 * k)), with: .color(Atlas.ink))
             if n.side != .any {
@@ -448,7 +452,7 @@ private struct RhythmPlayView: View {
                 let k = age / 0.35
                 var gg = g
                 gg.opacity = 1 - k
-                let rr = dialR + 18 * k
+                let rr = dialR + 18 * scale * CGFloat(k)
                 gg.stroke(Path(ellipseIn: CGRect(x: p.x - rr, y: p.y - rr, width: 2 * rr, height: 2 * rr)),
                           with: .color(j == .perfect ? Atlas.vermilion : Atlas.ink), lineWidth: 2.5 * (1 - k) + 0.5)
             }
@@ -464,18 +468,20 @@ private struct RhythmPlayView: View {
 
     private func drawStart(_ g: inout GraphicsContext, _ s: RhythmSession, _ host: Double, light: Double) {
         let p = cg(s.startPoint)
-        if light > 0 { drawLight(&g, p, CGFloat(40 * (0.7 + 0.3 * light)), light) }
+        let k = scale
+        if light > 0 { drawLight(&g, p, 40 * k * CGFloat(0.7 + 0.3 * light), light) }
         // A dial that turns slowly while it waits, with the mark at the top.
         var dash = g
         dash.translateBy(x: p.x, y: p.y)
         dash.rotate(by: .radians(host.truncatingRemainder(dividingBy: 60) * 0.35))
-        dash.stroke(Path(ellipseIn: CGRect(x: -44, y: -44, width: 88, height: 88)), with: .color(Atlas.ink.opacity(0.35)),
-                    style: StrokeStyle(lineWidth: 1.5, dash: [2, 7]))
+        let ring = 44 * k
+        dash.stroke(Path(ellipseIn: CGRect(x: -ring, y: -ring, width: 2 * ring, height: 2 * ring)),
+                    with: .color(Atlas.ink.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, dash: [2, 7]))
         var mark = Path()
-        mark.move(to: CGPoint(x: p.x, y: p.y - 50))
-        mark.addLine(to: CGPoint(x: p.x, y: p.y - 38))
+        mark.move(to: CGPoint(x: p.x, y: p.y - 50 * k))
+        mark.addLine(to: CGPoint(x: p.x, y: p.y - 38 * k))
         g.stroke(mark, with: .color(Atlas.vermilion), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-        g.fill(Atlas.star(p, CGFloat(22 * (1 + 0.12 * light))), with: .color(Atlas.ink))
+        g.fill(Atlas.star(p, 22 * k * CGFloat(1 + 0.12 * light)), with: .color(Atlas.ink))
     }
 
     private func drawHUD(_ g: inout GraphicsContext, _ s: RhythmSession, _ t: Double, _ size: CGSize) {
@@ -529,6 +535,8 @@ private struct RhythmPlayView: View {
 private struct RhythmResults: View {
     @EnvironmentObject var app: AppModel
     let session: RhythmSession
+    /// The table of this play for the Share button (made when the results appear).
+    @State private var exportURL: URL? = nil
 
     var body: some View {
         let j = session.judge
@@ -539,6 +547,7 @@ private struct RhythmResults: View {
                 Text("Созвездие «\(session.track.title)», \(Atlas.levelName(session.level).lowercased()) уровень")
                     .font(Atlas.caption.italic())
                     .foregroundStyle(Atlas.inkSoft)
+                if let summary = app.rhythmSummary { numbers(summary) }
             }
             .frame(maxWidth: .infinity)
 
@@ -577,6 +586,12 @@ private struct RhythmResults: View {
                         app.prepareRhythm(track: session.track, level: session.level, screen: session.screen)
                     }
                     .buttonStyle(AtlasPrimaryButton())
+                    if let url = exportURL {
+                        ShareLink(item: url) { Label("CSV", systemImage: "square.and.arrow.up") }
+                            .buttonStyle(AtlasSecondaryButton())
+                            .frame(width: 88)
+                            .accessibilityLabel("Поделиться таблицей CSV этой игры")
+                    }
                 }
             }
             .frame(width: 300)
@@ -585,6 +600,27 @@ private struct RhythmResults: View {
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LivingBackground(growFrom: app.launchTime).ignoresSafeArea())
+        .onAppear { exportURL = app.rhythmSummary.flatMap { SessionStore.exportCSV(play: $0) } }
+    }
+
+    /// The four numbers of the report as a short list under the plate, in the order every summary has them.
+    private func numbers(_ summary: SessionSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(ReportText.numbers(summary), id: \.self) { n in
+                HStack(spacing: 8) {
+                    Text(n.rowLabel).foregroundStyle(Atlas.inkSoft)
+                    Spacer(minLength: 4)
+                    Text(n.rowValue).foregroundStyle(Atlas.ink).monospacedDigit()
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            }
+            Text("Это результаты игры, а не медицинские показатели.")
+                .foregroundStyle(Atlas.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        }
+        .font(Atlas.caption)
     }
 
     /// What the numbers say, in a sentence each.

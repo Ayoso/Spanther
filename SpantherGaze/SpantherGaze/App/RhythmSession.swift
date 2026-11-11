@@ -55,18 +55,25 @@ final class RhythmSession: ObservableObject {
     private(set) var rejections: [Rejection] = []
 
     private var player: AVAudioPlayer?
+    /// «Мелкие цели»: the scale the stars are drawn at and the hit zone was made with (1: the regular size).
+    let targetScale: Double
 
     /// Seconds between the start wink and the first sample of the music.
     static let leadIn = 1.0
 
-    init(track: RhythmTrack, level: RhythmLevel, screen: Vec2, measuredErrorPt: Double?, latencySec: Double) {
+    init(track: RhythmTrack, level: RhythmLevel, screen: Vec2, measuredErrorPt: Double?, latencySec: Double,
+         targetScale: Double = 1, zoneFloorPt: Double = 0) {
         self.track = track
         self.level = level
         self.screen = screen
+        self.targetScale = min(1, max(0.4, targetScale))
         notes = track.chart(level)
         points = notes.map { Transforms.playAreaToScreen(x: $0.x, y: $0.y, size: screen) }
         startPoint = Transforms.playAreaToScreen(x: 0.5, y: 0.52, size: screen)
-        judge = RhythmJudge(notes: notes, rules: .level(level, measuredErrorPt: measuredErrorPt ?? 60), latencySec: latencySec)
+        judge = RhythmJudge(notes: notes,
+                            rules: .level(level, measuredErrorPt: measuredErrorPt ?? 60, scale: targetScale,
+                                          zoneFloorPt: zoneFloorPt),
+                            latencySec: latencySec)
         judgedAt = Array(repeating: nil, count: notes.count)
         garden = Garden(size: screen, seed: Atlas.gardenSeed)
         distractions = DistractionPlan.make(level: level, garden: garden, from: 0, to: max(0, track.endSec - 1),

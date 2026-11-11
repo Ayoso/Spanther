@@ -12,13 +12,18 @@ struct GameView: View {
                 if let scene {
                     // Transparent, over RootView's paper and garden.
                     SpriteView(scene: scene, options: [.ignoresSiblingOrder, .allowsTransparency])
-                    HUDView(hud: scene.hud, paused: $paused, onQuit: { app.route = .menu }, onRecalibrate: { app.beginCalibration() },
-                            canRecalibrate: app.mode == .eyes, touchMode: app.mode == .touch,
+                    HUDView(hud: scene.hud, paused: $paused, musicOn: $app.musicOn, onQuit: { app.route = .menu },
+                            onRecalibrate: { app.beginCalibration() },
+                            canRecalibrate: app.mode == .eyes, touchMode: app.mode == .touch, decoysOn: scene.decoysOn,
                             onEnergyTap: { [weak scene] in scene?.reloadTap() })
                 }
             }
             .onAppear { if scene == nil { scene = makeScene(size: geo.size) } }
-            .onChange(of: paused) { p in scene?.paused_ = p }
+            .onChange(of: paused) { p in
+                scene?.paused_ = p
+                // The music fades out on the pause plate and comes back with the play.
+                app.gamePaused = p
+            }
             .onChange(of: app.showDebug) { d in scene?.showAim = d }
         }
         .ignoresSafeArea()
@@ -31,12 +36,23 @@ struct GameView: View {
         s.marginPt = app.hitMarginPt
         s.useTouch = app.mode == .touch
         s.showAim = app.showDebug
+        // «Мелкие цели» and «Красные знаки», as they are set when the play starts.
+        s.targetScale = app.targetScale
+        s.zoneFloorPt = app.zoneFloorPt
+        s.decoysOn = app.decoysOn
+        let model = app
         #if DEBUG
         s.autoplay = app.autoplay != nil
+        if app.autoplay == "eyes" {
+            // The Simulator run by eye ends by itself, so that it also shows the summary and saves the play.
+            s.botQuitAfter = 120
+            s.botQuit = { [weak model] in model?.route = .menu }
+        }
         #endif
-        let model = app
         s.gazeSource = { [weak model] in model?.gaze ?? .lost }
+        s.gazeHeld = { [weak model] in model?.gazeHeld ?? false }
         s.onRecord = { [weak model] r in model?.log(r) }
+        s.onDecoy = { [weak model] r, p in model?.log(r, at: p) }
         s.blinkReload = { [weak model] in model?.consumeBlinkReload() ?? false }
         s.pendingBlinks = { [weak model] in model?.pendingBlinks ?? 0 }
         s.onGameEvent = { [weak model] kind, energy, level in model?.logGameEvent(kind: kind, energy: energy, level: level) }
@@ -48,10 +64,13 @@ struct GameView: View {
 private struct HUDView: View {
     @ObservedObject var hud: GameHUD
     @Binding var paused: Bool
+    @Binding var musicOn: Bool
     let onQuit: () -> Void
     let onRecalibrate: () -> Void
     let canRecalibrate: Bool
     let touchMode: Bool
+    /// The play has red signs: the top row counts the looks at them.
+    let decoysOn: Bool
     let onEnergyTap: () -> Void
 
     var body: some View {
@@ -70,13 +89,34 @@ private struct HUDView: View {
                         .accessibilityLabel("Щиты: \(hud.shields) из 5")
                     }
                     pill { Text("Уровень \(hud.level)").font(.system(size: 15, weight: .semibold, design: .serif)) }
+                    if decoysOn {
+                        // The count of looks at red signs: the sign itself and a number, no word and no alarm.
+                        pill {
+                            HStack(spacing: 6) {
+                                RedSign().frame(width: 14, height: 14)
+                                Text("\(hud.decoyErrors)").font(.system(size: 15, weight: .semibold, design: .serif))
+                                    .monospacedDigit()
+                            }
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(touchMode ? "Касаний красных знаков: \(hud.decoyErrors)"
+                                                      : "Взглядов на красные знаки: \(hud.decoyErrors)")
+                    }
                     // Landscape: one row, so the meteors keep the height. The energy bar sits in it.
                     if hud.energyMax > 0 {
                         EnergyBar(energy: hud.energy, max: hud.energyMax, reloadProgress: hud.reloadProgress,
                                   needsReload: hud.needsReload, pulse: hud.reloadCount, touchMode: touchMode, onTap: onEnergyTap)
                             .frame(maxWidth: 300)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
+                    Button { musicOn.toggle() } label: {
+                        pill {
+                            Image(systemName: musicOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 22)
+                        }
+                    }
+                    .accessibilityLabel(musicOn ? "Выключить музыку" : "Включить музыку")
                     Button { paused = true } label: {
                         pill { Image(systemName: "pause.fill").font(.system(size: 15, weight: .semibold)) }
                     }
@@ -86,12 +126,24 @@ private struct HUDView: View {
                 .padding(.leading, 56)
                 .padding(.trailing, 20)
                 .padding(.top, 10)
+                // The quiet line of the red signs: it fades in and out, nothing flashes.
+                if let line = hud.notice, !paused {
+                    Text(line)
+                        .font(.system(size: 17, weight: .semibold, design: .serif))
+                        .foregroundStyle(Atlas.ink)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(Atlas.paper.opacity(0.92), in: Capsule())
+                        .overlay(Capsule().stroke(Atlas.vermilion.opacity(0.45), lineWidth: 1))
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
                 Spacer()
                 if hud.needsReload && !paused && !hud.lookBack {
                     ReloadHint(touchMode: touchMode, progress: hud.reloadProgress, needed: hud.reloadNeeded)
                         .padding(.bottom, 80)
                 }
             }
+            .animation(.easeInOut(duration: 0.45), value: hud.notice)
             if let b = hud.banner {
                 Text(b).font(Atlas.title).foregroundStyle(Atlas.ink)
                     .atlasPlate(padding: 14)
@@ -103,6 +155,12 @@ private struct HUDView: View {
             if paused {
                 VStack(spacing: 12) {
                     Text("Пауза").font(Atlas.display(28)).foregroundStyle(Atlas.ink)
+                    if hud.decoys > 0 {
+                        Text(touchMode ? "Касаний красных знаков: \(hud.decoyErrors) из \(hud.decoys)"
+                                       : "Взглядов на красные знаки: \(hud.decoyErrors) из \(hud.decoys)")
+                            .font(Atlas.caption)
+                            .foregroundStyle(Atlas.inkSoft)
+                    }
                     Button { paused = false } label: { Text("Продолжить") }.buttonStyle(AtlasPrimaryButton())
                     if canRecalibrate {
                         Button(action: onRecalibrate) { Text("Калибровка") }.buttonStyle(AtlasSecondaryButton())
@@ -123,6 +181,22 @@ private struct HUDView: View {
             .background(Atlas.paper.opacity(0.88), in: Capsule())
             .overlay(Capsule().stroke(Atlas.ink.opacity(0.14), lineWidth: 1))
             .foregroundStyle(Atlas.ink)
+    }
+}
+
+/// The red sign as the HUD and the report draw it: a vermilion disc with a bar of paper across, like the one that
+/// flies in the game (DecoyNode).
+struct RedSign: View {
+    var body: some View {
+        Canvas { g, size in
+            let d = min(size.width, size.height)
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            g.fill(Path(ellipseIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)), with: .color(Atlas.vermilion))
+            let w = d * 0.58, h = d * 0.16
+            g.fill(Path(roundedRect: CGRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h), cornerRadius: h * 0.25),
+                   with: .color(Atlas.paper))
+        }
+        .accessibilityHidden(true)
     }
 }
 
