@@ -106,9 +106,10 @@ jobs:
   # at without a Mac. There is no face tracking in the Simulator, so "eyes" mode uses the bot's gaze.
   simulator-smoke:
     runs-on: macos-15
-    # Usually about 27 minutes, most of it fixed waits and the iPhone SE simulator's boot. On a slow runner
-    # (main, 9 November) the play step took 16.5 instead of 12.5 minutes and the SE step ran past 30.
-    timeout-minutes: 50
+    # About 42 minutes since the warm-up, the red signs and the report screens joined the plays (11 November:
+    # play step 25, iPhone SE step 13), most of it fixed waits and the SE simulator's boot. On a slow runner
+    # (main, 9 November) the play step took a third longer and the SE step ran past 30.
+    timeout-minutes: 75
     permissions:
       contents: write
     steps:
@@ -344,14 +345,19 @@ jobs:
 
           # Warm-up: the dot rests for 4 s, then moves for a minute. The bot follows it a little late and a little
           # off, has no gaze for 3 s of the horizontal part and stares into a corner for 3 s of the eight. When the
-          # minute ends the summary opens on the menu.
+          # minute ends the summary opens on the menu. A screenshot takes about 4 s on the runner, so each one
+          # waits for its own second after the launch instead of sleeping after the one before. The dot starts to
+          # move about 6 s after the launch: the horizontal part is then on screen from 6 to 26 s, the vertical
+          # one to 46 s and the eight to 66 s.
+          T0=$(python3 -c 'import time; print(time.time())')
+          since_launch() { python3 -c 'import sys, time; time.sleep(max(0, float(sys.argv[1]) + float(sys.argv[2]) - time.time()))' "$T0" "$1"; }
           xcrun simctl launch --stdout="$OUT/pursuit.stdout.log" --stderr="$OUT/pursuit.stderr.log" "$UDID" "$BID" -SpantherAutoplay pursuit
-          sleep 1; shot pursuit-0-countdown
-          sleep 12; shot pursuit-1-horizontal-a
-          sleep 0.3; shot pursuit-1-horizontal-b
-          sleep 20; shot pursuit-2-vertical
-          sleep 20; shot pursuit-3-eight
-          sleep 20; shot pursuit-4-summary
+          since_launch 2.5; shot pursuit-0-countdown
+          since_launch 13; shot pursuit-1-horizontal-a
+          shot pursuit-1-horizontal-b
+          since_launch 35; shot pursuit-2-vertical
+          since_launch 55; shot pursuit-3-eight
+          since_launch 88; shot pursuit-4-summary
           if running; then pass "warm-up: app running after the minute"; else fail "warm-up: app not running after the minute"; fi
           if cmp -s "$OUT/pursuit-1-horizontal-a.jpg" "$OUT/pursuit-1-horizontal-b.jpg" || cmp -s "$OUT/pursuit-2-vertical.jpg" "$OUT/pursuit-3-eight.jpg"; then
             fail "warm-up: the screen did not change between screenshots"
