@@ -15,16 +15,23 @@ struct ResultView: View {
                     }
                     Text(verdict(r)).font(Atlas.body).multilineTextAlignment(.center).foregroundStyle(Atlas.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(String(format: "Зона попадания: радиус метеорита + %.0f pt", app.hitMarginPt))
+                    Text(zoneText)
                         .font(Atlas.caption).foregroundStyle(Atlas.inkSoft)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
             VStack(spacing: 12) {
                 Button {
-                    if app.afterCalibration == .rhythm { app.openRhythm() } else { app.route = .game }
+                    switch app.afterCalibration {
+                    case .rhythm: app.openRhythm()
+                    case .pursuit: app.openPursuit(byEye: true)
+                    default: app.route = .game
+                    }
                 } label: {
-                    Text(app.afterCalibration == .rhythm ? "К ритм-режиму" : "Играть")
+                    Text(app.afterCalibration == .rhythm ? "К ритм-режиму"
+                         : app.afterCalibration == .pursuit ? "К разминке" : "Играть")
                 }
                     .buttonStyle(AtlasPrimaryButton())
                 Button { app.beginCalibration(then: app.afterCalibration) } label: { Text("Откалибровать заново") }
@@ -37,6 +44,15 @@ struct ResultView: View {
         }
         .padding(.horizontal, 48)
         .padding(.vertical, 24)
+    }
+
+    /// The meteors' hit zone in words (screen pt). With small targets it is the regular zone times the scale, and
+    /// never smaller than the floor the calibration's miss sets.
+    private var zoneText: String {
+        let scale = app.targetScale
+        guard scale < 1 else { return String(format: "Зона попадания: радиус метеорита + %.0f pt", app.hitMarginPt) }
+        return String(format: "Мелкие цели: зона попадания %.0f%% от обычной (радиус метеорита + %.0f pt), но не меньше %.0f pt",
+                      scale * 100, app.hitMarginPt, app.zoneFloorPt)
     }
 
     private func verdict(_ r: AccuracyReport) -> String {

@@ -35,6 +35,7 @@ struct RootView: View {
             case .game: GameView()
             case .winkTest: WinkTestView()
             case .rhythm: RhythmView()
+            case .pursuit: PursuitView()
             }
             if app.showDebug { DebugOverlay().allowsHitTesting(false) }
         }
@@ -48,7 +49,7 @@ struct RootView: View {
         switch app.route {
         case .winkTest:
             Palette.space.ignoresSafeArea()
-        case .calibration, .check, .rhythm:
+        case .calibration, .check, .rhythm, .pursuit:
             Atlas.paper.ignoresSafeArea()
         case .menu, .result, .game:
             ZStack {

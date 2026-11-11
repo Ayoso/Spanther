@@ -239,6 +239,72 @@ final class RhythmTests: XCTestCase {
         XCTAssertFalse(RhythmRules.level(.normal, measuredErrorPt: 0).acceptBlink)
     }
 
+    func testSmallTargetsShrinkTheAimZoneDownToTheFloor() {
+        XCTAssertEqual(RhythmRules.level(.normal, measuredErrorPt: 40).aimRadiusPt, 110)
+        XCTAssertEqual(RhythmRules.level(.normal, measuredErrorPt: 40, scale: 0.7).aimRadiusPt, 77, accuracy: 1e-9)
+        XCTAssertEqual(RhythmRules.level(.hard, measuredErrorPt: 70, scale: 0.7).aimRadiusPt, 87.5, accuracy: 1e-9)
+        // A calibration that missed by 80 pt: the floor (1.25 x 80) is above the scaled zone of the hard level.
+        XCTAssertEqual(RhythmRules.level(.hard, measuredErrorPt: 80, scale: 0.7, zoneFloorPt: 100).aimRadiusPt, 100)
+        XCTAssertEqual(RhythmRules.level(.easy, measuredErrorPt: 80, scale: 0.7, zoneFloorPt: 100).aimRadiusPt, 119, accuracy: 1e-9)
+        XCTAssertEqual(RhythmRules.level(.easy, measuredErrorPt: 40, scale: 0.01).aimRadiusPt, 52, accuracy: 1e-9, "no smaller than 0.4")
+        XCTAssertEqual(RhythmRules.level(.easy, measuredErrorPt: 40, scale: 5).aimRadiusPt, 130, "never bigger")
+        XCTAssertTrue(RhythmRules.level(.easy, measuredErrorPt: 40, scale: 0.7).acceptBlink)
+    }
+
+    func testTimingDeviationIsFreeOfAConstantDelay() {
+        func judge(shift: Double) -> RhythmJudge {
+            var j = RhythmJudge(notes: notes([1, 2, 3, 4, 5]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false),
+                                latencySec: 0.1 + shift)
+            for (t, late) in zip([1.0, 2, 3, 4], [0.10, 0.14, 0.06, 0.10]) {
+                _ = j.closure(side: .left, time: t + late + shift, aimDistance: { _ in 0 })
+            }
+            _ = j.advance(to: 9)   // the fifth note is missed and does not count
+            return j
+        }
+        let j = judge(shift: 0)
+        XCTAssertEqual(j.playedOffsets.count, 4)
+        XCTAssertEqual(j.meanOffsetSec ?? 0, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(j.timingDeviationSec ?? 0, 0.02, accuracy: 1e-9)
+        // The same play by someone whose winks land 70 ms later: the mean moves, the deviation does not.
+        let late = judge(shift: 0.07)
+        XCTAssertEqual(late.meanOffsetSec ?? 0, 0.17, accuracy: 1e-9)
+        XCTAssertEqual(late.timingDeviationSec ?? 0, 0.02, accuracy: 1e-9)
+    }
+
+    func testTimingDeviationNeedsTwoPlayedNotes() {
+        var j = RhythmJudge(notes: notes([1, 2]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        XCTAssertNil(j.timingDeviationSec)
+        XCTAssertNil(j.meanOffsetSec)
+        _ = j.closure(side: .left, time: 1.05, aimDistance: { _ in 0 })
+        XCTAssertEqual(j.meanOffsetSec ?? 0, 0.05, accuracy: 1e-9)
+        XCTAssertNil(j.timingDeviationSec, "one note has no spread")
+        // A wink in the window with the aim off the note is a miss: its timing is not counted.
+        _ = j.closure(side: .left, time: 2.2, aimDistance: { _ in 500 })
+        XCTAssertEqual(j.playedOffsets.count, 1)
+        XCTAssertNil(j.timingDeviationSec)
+    }
+
+    func testWinksAreCountedPerEye() {
+        var j = RhythmJudge(notes: notes([1, 2, 3, 4, 5]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: true), latencySec: 0)
+        XCTAssertNil(j.winkAccuracy(.left), "no winks yet")
+        _ = j.closure(side: .left, time: 1.0, aimDistance: { _ in 0 })      // left plays note 1
+        _ = j.closure(side: .left, time: 1.5, aimDistance: { _ in 0 })      // left, far from any note
+        _ = j.closure(side: .left, time: 2.0, aimDistance: { _ in 0 })      // left plays note 2
+        _ = j.closure(side: .right, time: 3.0, aimDistance: { _ in 500 })   // right, in the window but off the note
+        _ = j.closure(side: .right, time: 4.0, aimDistance: { _ in 0 })     // right plays note 4
+        _ = j.closure(side: .both, time: 5.0, aimDistance: { _ in 0 })      // a blink plays note 5: nobody's wink
+        XCTAssertEqual(j.winks(.left).played, 2)
+        XCTAssertEqual(j.winks(.left).all, 3)
+        XCTAssertEqual(j.winkAccuracy(.left) ?? 0, 2.0 / 3, accuracy: 1e-12)
+        XCTAssertEqual(j.winks(.right).played, 1)
+        XCTAssertEqual(j.winks(.right).all, 2)
+        XCTAssertEqual(j.winkAccuracy(.right) ?? 0, 0.5, accuracy: 1e-12)
+        XCTAssertEqual(j.winks(.both).all, 0)
+        XCTAssertNil(j.winkAccuracy(.both))
+        XCTAssertEqual(j.count(.miss), 1)
+        XCTAssertEqual(j.playedBy, [.left, .left, .right, .right, .both])
+    }
+
     func testScoreGrowsWithTheCombo() {
         var j = RhythmJudge(notes: notes([1, 2, 3]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
         for t in [1.0, 2.0, 3.0] { _ = j.closure(side: .left, time: t, aimDistance: { _ in 0 }) }

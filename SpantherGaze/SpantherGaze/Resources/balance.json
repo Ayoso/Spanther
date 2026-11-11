@@ -29,6 +29,17 @@
   "pauseWhenFaceLostSec": 1.0,
   "lockZoneScale": 1.4,
 
+  "targetScale": 0.7,
+  "minZonePerError": 1.25,
+  "decoys": {
+    "sizePt": 84,
+    "travelSec": [7.0, 5.0],
+    "intervalSec": [8.0, 6.0],
+    "firstAfterSec": 6,
+    "maxOnScreen": 1,
+    "errorDwellSec": 0.25
+  },
+
   "energy": {
     "max": 10,
     "costByClass": { "S": 1, "M": 2, "L": 3, "XL": 5 },

@@ -106,9 +106,10 @@ jobs:
   # at without a Mac. There is no face tracking in the Simulator, so "eyes" mode uses the bot's gaze.
   simulator-smoke:
     runs-on: macos-15
-    # Usually about 24 minutes, most of it fixed waits and the iPhone SE simulator's boot. On a slow runner
-    # (main, 9 November) the play step took 16.5 instead of 12.5 minutes and the SE step ran past 30.
-    timeout-minutes: 40
+    # About 42 minutes since the warm-up, the red signs and the report screens joined the plays (11 November:
+    # play step 25, iPhone SE step 13), most of it fixed waits and the SE simulator's boot. On a slow runner
+    # (main, 9 November) the play step took a third longer and the SE step ran past 30.
+    timeout-minutes: 75
     permissions:
       contents: write
     steps:
@@ -193,6 +194,63 @@ jobs:
           sys.exit(1 if errors else 0)
           PY
             then pass "$mode: energy accounting matches balance.json"; else fail "$mode: energy accounting (see $mode.energy.txt)"; fi
+            # Red signs: the bot looks at every third one and passes the others by, and the play is set up with
+            # small targets (balance.json targetScale).
+            if python3 - "$OUT/$mode.csv" SpantherGaze/SpantherGaze/Resources/balance.json > "$OUT/$mode.signs.txt" 2>&1 <<'PY'
+          import csv, json, sys
+          scale = json.load(open(sys.argv[2]))["targetScale"]
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          games = [r for r in rows if r["kind"] == "game"]
+          signs = [r for r in rows if r["kind"] == "decoy"]
+          looked = [r for r in signs if r["decoy_looked"] == "1"]
+          passed = [r for r in signs if r["decoy_looked"] == "0"]
+          set_up = games[0] if games else {"target_scale": "0", "decoy_looked": ""}
+          print(f"{len(signs)} red signs, {len(looked)} looked at, {len(passed)} passed by,"
+                f" target scale {float(set_up['target_scale']):.2f}, signs on {set_up['decoy_looked']}")
+          # A look that became an error began after the sign appeared and lasted at least the threshold.
+          timed = all(r["reaction_s"] and 0 <= float(r["reaction_s"]) < float(r["lifetime_s"]) for r in looked)
+          ok = (len(games) == 1 and abs(float(set_up["target_scale"]) - scale) < 0.001 and set_up["decoy_looked"] == "1"
+                and len(looked) >= 1 and len(passed) >= 2 and timed)
+          sys.exit(0 if ok else 1)
+          PY
+            then pass "$mode: $(tail -n 1 "$OUT/$mode.signs.txt")"; else fail "$mode: red signs: $(tail -n 1 "$OUT/$mode.signs.txt")"; fi
+            if [ "$mode" = eyes ]; then
+              # By eye the bot leaves the game after two minutes of play: the play goes into the history
+              # (Application Support/sessions.json) and its summary opens on the menu.
+              SJ="$DATA/Library/Application Support/sessions.json"
+              for i in $(seq 1 50); do
+                if [ -f "$SJ" ] && grep -q '"meteors"' "$SJ"; then break; fi
+                sleep 3
+              done
+              sleep 4; shot eyes-summary
+              if running; then pass "eyes: app running on the summary"; else fail "eyes: app not running on the summary"; fi
+              if [ -f "$SJ" ]; then cp "$SJ" "$OUT/sessions-eyes.json"; fi
+              if python3 - "$OUT/sessions-eyes.json" > "$OUT/eyes.play.txt" 2>&1 <<'PY'
+          import json, sys
+          plays = [p for p in json.load(open(sys.argv[1])) if p["game"] == "meteors"]
+          p = plays[-1] if plays else {}
+          print(f"{len(plays)} meteor play kept: {p.get('burned')} of {p.get('meteors')} burned,"
+                f" hold {p.get('holdShare', 0):.2f}, red signs looked at {p.get('decoyErrors')} of {p.get('decoys')},"
+                f" target scale {p.get('targetScale')}")
+          ok = (len(plays) == 1 and p["meteors"] >= 10 and 0 < p["holdShare"] <= 1 and p["decoys"] >= 6
+                and 1 <= p["decoyErrors"] < p["decoys"] and abs(p["targetScale"] - 0.7) < 0.01)
+          sys.exit(0 if ok else 1)
+          PY
+              then pass "eyes: $(tail -n 1 "$OUT/eyes.play.txt")"; else fail "eyes: saved play: $(tail -n 1 "$OUT/eyes.play.txt")"; fi
+              # The music: the app writes what its engine did when the game closes. A runner without a sound
+              # device cannot start the engine; that is noted, not failed.
+              cp "$DATA/tmp/ambient.txt" "$OUT/ambient.txt" 2>/dev/null || true
+              if [ -f "$OUT/ambient.txt" ]; then
+                if python3 - "$OUT/ambient.txt" <<'PY'
+          import re, sys
+          m = re.search(r"ambient playing, (\d+) Hz, (\d+) frames, peak ([0-9.]+)", open(sys.argv[1]).read())
+          sys.exit(0 if m and int(m.group(2)) > int(m.group(1)) and 0.01 < float(m.group(3)) < 0.75 else 1)
+          PY
+                then pass "music: $(cat "$OUT/ambient.txt")"; else echo "NOTE music: $(cat "$OUT/ambient.txt")" >> "$OUT/checks.txt"; fi
+              else
+                fail "music: the game closed without writing ambient.txt"
+              fi
+            fi
             xcrun simctl terminate "$UDID" "$BID" || true
           done
 
@@ -285,7 +343,36 @@ jobs:
           fi
           xcrun simctl terminate "$UDID" "$BID" || true
 
-          # Session history: the finished track is kept on the phone (Application Support/sessions.json).
+          # Warm-up: the dot rests for 4 s, then moves for a minute. The bot follows it a little late and a little
+          # off, has no gaze for 3 s of the horizontal part and stares into a corner for 3 s of the eight. When the
+          # minute ends the summary opens on the menu. A screenshot takes about 4 s on the runner, so each one
+          # waits for its own second after the launch instead of sleeping after the one before. The dot starts to
+          # move about 6 s after the launch: the horizontal part is then on screen from 6 to 26 s, the vertical
+          # one to 46 s and the eight to 66 s.
+          T0=$(python3 -c 'import time; print(time.time())')
+          since_launch() { python3 -c 'import sys, time; time.sleep(max(0, float(sys.argv[1]) + float(sys.argv[2]) - time.time()))' "$T0" "$1"; }
+          xcrun simctl launch --stdout="$OUT/pursuit.stdout.log" --stderr="$OUT/pursuit.stderr.log" "$UDID" "$BID" -SpantherAutoplay pursuit
+          since_launch 2.5; shot pursuit-0-countdown
+          since_launch 13; shot pursuit-1-horizontal-a
+          shot pursuit-1-horizontal-b
+          since_launch 35; shot pursuit-2-vertical
+          since_launch 55; shot pursuit-3-eight
+          since_launch 88; shot pursuit-4-summary
+          if running; then pass "warm-up: app running after the minute"; else fail "warm-up: app not running after the minute"; fi
+          if cmp -s "$OUT/pursuit-1-horizontal-a.jpg" "$OUT/pursuit-1-horizontal-b.jpg" || cmp -s "$OUT/pursuit-2-vertical.jpg" "$OUT/pursuit-3-eight.jpg"; then
+            fail "warm-up: the screen did not change between screenshots"
+          else
+            pass "warm-up: the screen changes between screenshots"
+          fi
+          DATA=$(xcrun simctl get_app_container "$UDID" "$BID" data 2>/dev/null) || true
+          CSV=$(ls -t "$DATA"/tmp/spanther-*.csv 2>/dev/null | head -n 1) || true
+          if [ -n "$CSV" ]; then cp "$CSV" "$OUT/pursuit.csv"; fi
+          S=$(count pursuit_start "$OUT/pursuit.csv"); E=$(count pursuit_end "$OUT/pursuit.csv")
+          if [ "$S" -eq 1 ] && [ "$E" -eq 1 ]; then pass "warm-up: started and ended once in the CSV"; else fail "warm-up: $S starts and $E ends in the CSV"; fi
+          xcrun simctl terminate "$UDID" "$BID" || true
+
+          # Session history: every finished play is kept on the phone (Application Support/sessions.json), with
+          # the numbers of the report.
           SJ="$DATA/Library/Application Support/sessions.json"
           if [ -f "$SJ" ]; then cp "$SJ" "$OUT/sessions.json"; fi
           if python3 - "$OUT/sessions.json" > "$OUT/sessions.check.txt" 2>&1 <<'PY'
@@ -294,14 +381,35 @@ jobs:
           rhythm = [p for p in plays if p["game"] == "rhythm"]
           last = rhythm[-1] if rhythm else {}
           print(f"{len(plays)} plays kept, {len(rhythm)} rhythm, the last with {last.get('hits')} of {last.get('notes')} notes"
-                f" played, accuracy {last.get('accuracy', 0):.2f}")
-          sys.exit(0 if rhythm and last["notes"] >= 60 and last["hits"] >= 0.75 * last["notes"] else 1)
+                f" played, accuracy {last.get('accuracy', 0):.2f}, timing deviation {last.get('timingDeviationMs', 0):.0f} ms,"
+                f" gaze held {last.get('holdShare', 0):.2f}, winks left {last.get('winkLeft', 0):.2f}"
+                f" right {last.get('winkRight', 0):.2f}")
+          # The bot winks 0.04 to 0.16 s after the beat, so its notes lie about 30 ms from its own mean lateness.
+          ok = (rhythm and last["notes"] >= 60 and last["hits"] >= 0.75 * last["notes"]
+                and 10 <= last["timingDeviationMs"] <= 60 and last["holdShare"] >= 0.9
+                and 0.7 <= last["winkLeft"] <= 1 and 0.7 <= last["winkRight"] <= 1)
+          sys.exit(0 if ok else 1)
           PY
           then pass "history: $(tail -n 1 "$OUT/sessions.check.txt")"; else fail "history: $(tail -n 1 "$OUT/sessions.check.txt")"; fi
+          if python3 - "$OUT/sessions.json" > "$OUT/pursuit.check.txt" 2>&1 <<'PY'
+          import json, sys
+          warm = [p for p in json.load(open(sys.argv[1])) if p["game"] == "pursuit"]
+          p = warm[-1] if warm else {}
+          print(f"{len(warm)} warm-up kept: gaze near the dot {p.get('holdShare', 0):.2f} (horizontal"
+                f" {p.get('pursuitHorizontal', 0):.2f}, vertical {p.get('pursuitVertical', 0):.2f}, eight"
+                f" {p.get('pursuitEight', 0):.2f}), no gaze {p.get('pursuitLostShare', 0):.3f}, mean distance"
+                f" {p.get('pursuitMeanCm', 0):.2f} cm")
+          # Of the 55 scored seconds the bot is away for 6: 3 with no gaze (horizontal), 3 in a corner (eight).
+          ok = (len(warm) == 1 and 0.82 <= p["holdShare"] <= 0.95 and p["pursuitVertical"] >= 0.97
+                and 0.72 <= p["pursuitHorizontal"] <= 0.92 and 0.72 <= p["pursuitEight"] <= 0.93
+                and 0.03 <= p["pursuitLostShare"] <= 0.09 and 0.2 <= p["pursuitMeanCm"] <= 2.5)
+          sys.exit(0 if ok else 1)
+          PY
+          then pass "warm-up: $(tail -n 1 "$OUT/pursuit.check.txt")"; else fail "warm-up: $(tail -n 1 "$OUT/pursuit.check.txt")"; fi
 
-          # The report screens with made-up plays (-SpantherDemoReport): the summary after a meteor play, and a
-          # child's history.
-          for page in summary history; do
+          # The report screens with made-up plays (-SpantherDemoReport): the summary after a meteor play, a
+          # child's history, and the settings sheet.
+          for page in summary history settings; do
             xcrun simctl launch --stdout="$OUT/report-$page.stdout.log" --stderr="$OUT/report-$page.stderr.log" "$UDID" "$BID" -SpantherDemoReport "$page"
             sleep 8; shot "report-$page"
             if running; then pass "report $page: app running"; else fail "report $page: app not running"; fi
@@ -344,18 +452,20 @@ jobs:
             echo "FAIL rhythm track list on iPhone SE: app not running" >> "$OUT/checks.txt"
           fi
           xcrun simctl terminate "$SE" "$BID" || true
-          # The history, the report's widest screen.
-          xcrun simctl launch "$SE" "$BID" -SpantherDemoReport history
-          sleep 8
-          xcrun simctl io "$SE" screenshot --type=png "$OUT/tmp.png" >/dev/null 2>&1 \
-            && sips -s format jpeg -s formatOptions 80 -Z 1200 "$OUT/tmp.png" --out "$OUT/report-history-se.jpg" >/dev/null 2>&1
-          rm -f "$OUT/tmp.png"
-          if xcrun simctl spawn "$SE" launchctl list | grep -q "UIKitApplication:$BID"; then
-            echo "PASS report history on iPhone SE: app running" >> "$OUT/checks.txt"
-          else
-            echo "FAIL report history on iPhone SE: app not running" >> "$OUT/checks.txt"
-          fi
-          xcrun simctl terminate "$SE" "$BID" || true
+          # The history, the report's widest screen; the summary with its four tiles; the settings sheet.
+          for page in history summary settings; do
+            xcrun simctl launch "$SE" "$BID" -SpantherDemoReport "$page"
+            sleep 8
+            xcrun simctl io "$SE" screenshot --type=png "$OUT/tmp.png" >/dev/null 2>&1 \
+              && sips -s format jpeg -s formatOptions 80 -Z 1200 "$OUT/tmp.png" --out "$OUT/report-$page-se.jpg" >/dev/null 2>&1
+            rm -f "$OUT/tmp.png"
+            if xcrun simctl spawn "$SE" launchctl list | grep -q "UIKitApplication:$BID"; then
+              echo "PASS report $page on iPhone SE: app running" >> "$OUT/checks.txt"
+            else
+              echo "FAIL report $page on iPhone SE: app not running" >> "$OUT/checks.txt"
+            fi
+            xcrun simctl terminate "$SE" "$BID" || true
+          done
       - name: Publish to the ci-screenshots branch
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         env:

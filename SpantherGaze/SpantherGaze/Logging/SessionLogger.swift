@@ -26,6 +26,9 @@ final class SessionLogger {
         // Night vision (tracking rows: 1 on), the light ARKit estimates on each frame (lumens, about 1000 in a lit
         // room), and the rhythm play's distractions (their kind).
         case night, light = "light_lm", distraction
+        // «Мелкие цели» and the red signs: the scale of the targets and the smallest hit zone of a meteor play
+        // (`game` rows), and whether a red sign was looked at (`decoy` rows: 1 an error, 0 passed by).
+        case targetScale = "target_scale", zoneFloor = "zone_floor_pt", decoyLooked = "decoy_looked"
     }
 
     /// One CSV line. Cells that are not set stay empty. Built one cell at a time: long array literals of
@@ -134,6 +137,48 @@ final class SessionLogger {
         r.set(.lifetime, a.lifetimeSec)
         r.set(.slips, a.slips)
         r[.destroyed] = a.destroyed ? "1" : "0"
+        write(r.line)
+    }
+
+    /// `game`: a meteor play starts. The scale of its targets and hit zones (1 regular, 0.7 small), the smallest
+    /// hit zone that scale may give (screen pt, 0 none) and whether red signs fly (decoy_looked column: 1 or 0).
+    func game(time: Double, targetScale: Double, zoneFloorPt: Double, decoys: Bool) {
+        var r = Row(kind: "game", time: time)
+        r.set(.targetScale, targetScale)
+        r.set(.zoneFloor, zoneFloorPt)
+        r[.decoyLooked] = decoys ? "1" : "0"
+        write(r.line)
+    }
+
+    /// `decoy`: a red sign left the play at `p` (screen pt). decoy_looked: 1 when the gaze rested on it for the
+    /// threshold (an error), 0 when it was passed by. reaction_s: from its appearance to the start of that look.
+    func decoy(_ d: DecoyRecord, at p: Vec2, time: Double) {
+        var r = Row(kind: "decoy", time: time)
+        r.set(.targetX, p.x)
+        r.set(.targetY, p.y)
+        r.set(.level, d.level)
+        r.set(.reaction, d.lookSec)
+        r.set(.lifetime, d.lifetimeSec)
+        r[.decoyLooked] = d.looked ? "1" : "0"
+        write(r.line)
+    }
+
+    /// The warm-up. `pursuit_start`: the target starts to move at `time`; aim_pt holds the distance within which
+    /// the gaze counts as on the target, period_s the length of the warm-up. Its frames are `pursuit_frame` sample
+    /// rows with the target and the gaze (screen pt), so another radius can be replayed on the same run (CLAUDE.md
+    /// rule 7). `pursuit_end`: the share of scored frames on the target (accuracy column, 0...1) and the mean
+    /// distance to it (aim_pt).
+    func pursuitStart(time: Double, radiusPt: Double, durationSec: Double) {
+        var r = Row(kind: "pursuit_start", time: time)
+        r.set(.aim, radiusPt)
+        r.set(.period, durationSec)
+        write(r.line)
+    }
+
+    func pursuitEnd(time: Double, onTarget: Double?, meanDistancePt: Double?) {
+        var r = Row(kind: "pursuit_end", time: time)
+        r.set(.accuracy, onTarget)
+        r.set(.aim, meanDistancePt)
         write(r.line)
     }
 

@@ -117,12 +117,134 @@ final class SessionReportTests: XCTestCase {
         XCTAssertEqual(SessionHistory.progress([normal1, easy], game: .rhythm), [])
     }
 
+    func testMeteorHoldShareCountsOnlyTheMeteorsLookedAt() {
+        var t = MeteorTally()
+        t.add(rock(level: 1, reaction: 0.5, slips: 0, burned: true))    // held
+        t.add(rock(level: 1, reaction: 0.7, slips: 0, burned: true))    // held
+        t.add(rock(level: 1, reaction: 0.9, slips: 2, burned: true))    // burned, but the gaze left it twice
+        t.add(rock(level: 1, reaction: 1.5, slips: 0, burned: false))   // looked at, not burned
+        t.add(rock(level: 1, reaction: nil, slips: 0, burned: false))   // never looked at: not a question of holding
+        let s = t.summary(id: "h", childCode: "", start: thursday, durationSec: 60, byEye: true, calibrationErrorCm: 1)
+        XCTAssertEqual(s.holdShare ?? 0, 0.5, accuracy: 1e-12)
+        XCTAssertNil(s.decoys, "a play without red signs has no count of them")
+        XCTAssertNil(s.decoyErrors)
+        XCTAssertNil(s.decoyErrorShare)
+        XCTAssertNil(s.timingDeviationMs)
+        XCTAssertNil(s.winkLeft)
+        var none = MeteorTally()
+        none.add(rock(level: 1, reaction: nil, slips: 0, burned: false))
+        XCTAssertNil(none.summary(id: "n", childCode: "", start: thursday, durationSec: 9, byEye: true,
+                                  calibrationErrorCm: 1).holdShare)
+    }
+
+    func testDecoyErrorsAreCounted() {
+        var t = MeteorTally()
+        t.add(rock(level: 1, reaction: 0.5, slips: 0, burned: true))
+        t.add(DecoyRecord(level: 1, lifetimeSec: 7, looked: false, lookSec: nil))
+        t.add(DecoyRecord(level: 1, lifetimeSec: 2.1, looked: true, lookSec: 1.8))
+        t.add(DecoyRecord(level: 2, lifetimeSec: 7, looked: false, lookSec: nil))
+        t.add(DecoyRecord(level: 2, lifetimeSec: 7, looked: false, lookSec: nil))
+        let s = t.summary(id: "d", childCode: "", start: thursday, durationSec: 60, byEye: true, calibrationErrorCm: 1,
+                          targetScale: 0.7)
+        XCTAssertEqual(s.decoys, 4)
+        XCTAssertEqual(s.decoyErrors, 1)
+        XCTAssertEqual(s.decoyErrorShare ?? 0, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(s.targetScale, 0.7)
+        XCTAssertEqual(t.decoyRecords.count, 4)
+        // Signs that all passed: zero errors is a result, not a missing number.
+        var clean = MeteorTally()
+        clean.add(DecoyRecord(level: 1, lifetimeSec: 7, looked: false, lookSec: nil))
+        let c = clean.summary(id: "c", childCode: "", start: thursday, durationSec: 60, byEye: true, calibrationErrorCm: 1)
+        XCTAssertEqual(c.decoyErrors, 0)
+        XCTAssertEqual(c.decoyErrorShare, 0)
+        XCTAssertNil(c.targetScale, "the regular size is not written down")
+    }
+
+    func testRhythmSummaryHasTimingAndBothEyes() {
+        // Left winks: 1.02 (perfect), 3.2 (ok), 4.6 (far from any note). Right wink: 2.15 (good).
+        let s = rhythm("К-07", thursday, level: .normal)
+        let offsets = [0.02, 0.15, 0.2]
+        let mean = offsets.reduce(0, +) / 3
+        XCTAssertEqual(s.timingOffsetMs ?? 0, mean * 1000, accuracy: 1e-6)
+        XCTAssertEqual(s.timingDeviationMs ?? 0, offsets.reduce(0) { $0 + abs($1 - mean) } / 3 * 1000, accuracy: 1e-6)
+        XCTAssertEqual(s.winkLeft ?? 0, 2.0 / 3, accuracy: 1e-12)
+        XCTAssertEqual(s.winkRight ?? 0, 1, accuracy: 1e-12)
+        XCTAssertEqual(s.holdShare ?? 0, 1, accuracy: 1e-12, "every wink in a note's window had the gaze on the note")
+        // By finger there are no eyes to compare and no gaze to hold; the timing is still there.
+        let finger = rhythm("К-07", thursday, level: .normal, byEye: false)
+        XCTAssertNil(finger.winkLeft)
+        XCTAssertNil(finger.winkRight)
+        XCTAssertNil(finger.holdShare)
+        XCTAssertNotNil(finger.timingDeviationMs)
+    }
+
+    func testRhythmHoldShareDropsWhenTheGazeIsOffTheNote() {
+        var j = RhythmJudge(notes: notes([1, 2, 3, 4]), rules: RhythmRules(aimRadiusPt: 80, acceptBlink: false), latencySec: 0)
+        _ = j.closure(side: .left, time: 1, aimDistance: { _ in 10 })
+        _ = j.closure(side: .left, time: 2, aimDistance: { _ in 300 })   // on the beat, the gaze elsewhere
+        _ = j.closure(side: .right, time: 3, aimDistance: { _ in 10 })
+        _ = j.advance(to: 10)                                              // the last note: no wink at all
+        let s = SessionSummary.rhythm(id: "r", childCode: "", start: thursday, durationSec: 30, byEye: true,
+                                      calibrationErrorCm: 1, track: "T", level: .hard, judge: j, targetScale: 0.7)
+        XCTAssertEqual(s.holdShare ?? 0, 2.0 / 3, accuracy: 1e-12)
+        XCTAssertEqual(s.winkLeft ?? 0, 0.5, accuracy: 1e-12)
+        XCTAssertEqual(s.winkRight ?? 0, 1, accuracy: 1e-12)
+        XCTAssertEqual(s.targetScale, 0.7)
+    }
+
+    func testOldStoredPlaysStillOpen() throws {
+        // A play as the previous build stored it: none of the new numbers.
+        let old = #"[{"id":"a","childCode":"К-07","game":"meteors","start":784000000,"durationSec":120,"byEye":true,"#
+            + #""calibrationErrorCm":1.1,"meteors":10,"burned":8,"meanFirstLookSec":0.9,"slipsPerMeteor":0.2,"maxLevel":2}]"#
+        let plays = SessionHistory.decode(Data(old.utf8))
+        XCTAssertEqual(plays.count, 1)
+        XCTAssertEqual(plays.first?.burned, 8)
+        XCTAssertNil(plays.first?.holdShare)
+        XCTAssertNil(plays.first?.targetScale)
+        XCTAssertNil(plays.first?.decoyErrors)
+    }
+
+    func testAPlayThisBuildCannotReadIsLeftOutAlone() {
+        let good = meteors("К-07", thursday)
+        var text = String(decoding: SessionHistory.encode([good, good]), as: UTF8.self)
+        // Between the two, a play of a game a later build might add.
+        let future = #"{"id":"z","childCode":"К-07","game":"memory","start":784000000,"durationSec":5,"byEye":true}"#
+        text = text.replacingOccurrences(of: "},{", with: "},\(future),{")
+        XCTAssertTrue(text.contains("memory"))
+        XCTAssertEqual(SessionHistory.decode(Data(text.utf8)).map(\.id), [good.id, good.id])
+    }
+
+    func testProgressNeedsTheSameTargetSize() {
+        func small(_ start: Date) -> SessionSummary {
+            var s = meteors("К-07", start)
+            s.targetScale = 0.7
+            return s
+        }
+        let big1 = meteors("К-07", wednesday), small1 = small(thursday), small2 = small(thursdayLater)
+        XCTAssertEqual(SessionHistory.progress([big1, small1, small2], game: .meteors).map(\.id), [small1.id, small2.id])
+        XCTAssertEqual(SessionHistory.progress([big1, small1], game: .meteors), [], "a size change is not a trend")
+        // The warm-up has no target size to keep apart.
+        func warmUp(_ start: Date) -> SessionSummary {
+            var t = PursuitTally(radiusPt: 90)
+            t.add(part: .horizontal, distance: 10)
+            return .pursuit(id: UUID().uuidString, childCode: "К-07", start: start, durationSec: 60, byEye: true,
+                            calibrationErrorCm: 1, tally: t, ptPerCm: 60)
+        }
+        let w1 = warmUp(wednesday), w2 = warmUp(thursday)
+        XCTAssertEqual(SessionHistory.progress([w1, small1, w2], game: .pursuit).map(\.id), [w1.id, w2.id])
+        XCTAssertEqual(SessionHistory.gameName(.pursuit), "Разминка")
+    }
+
     func testCSVForARussianSpreadsheet() {
         var m = MeteorTally()
         m.add(rock(level: 1, reaction: 0.5, slips: 0, burned: true))
         m.add(rock(level: 3, reaction: 1.25, slips: 1, burned: true))
         m.add(rock(level: 3, reaction: nil, slips: 0, burned: false))
-        let play = m.summary(id: "m", childCode: "К-07", start: thursday, durationSec: 252, byEye: true, calibrationErrorCm: 1.234)
+        m.add(DecoyRecord(level: 1, lifetimeSec: 7, looked: false, lookSec: nil))
+        m.add(DecoyRecord(level: 3, lifetimeSec: 2, looked: true, lookSec: 1.7))
+        m.add(DecoyRecord(level: 3, lifetimeSec: 7, looked: false, lookSec: nil))
+        let play = m.summary(id: "m", childCode: "К-07", start: thursday, durationSec: 252, byEye: true,
+                             calibrationErrorCm: 1.234, targetScale: 0.7)
         var tune = SessionSummary(id: "r", childCode: "К;\"07\"", game: .rhythm, start: wednesday, durationSec: 61,
                                   byEye: false, calibrationErrorCm: nil)
         tune.track = "Track"
@@ -132,16 +254,52 @@ final class SessionReportTests: XCTestCase {
         tune.hits = 3
         tune.perfect = 1
         tune.maxCombo = 3
+        tune.timingDeviationMs = 41.6
+        tune.timingOffsetMs = 123.4
+        var tally = PursuitTally(radiusPt: 100)
+        for _ in 0..<3 { tally.add(part: .horizontal, distance: 60) }
+        tally.add(part: .vertical, distance: 150)
+        tally.add(part: .eight, distance: nil)
+        let warmUp = SessionSummary.pursuit(id: "p", childCode: "К-07", start: thursdayLater, durationSec: 60, byEye: true,
+                                            calibrationErrorCm: 0.95, tally: tally, ptPerCm: 60)
         // Almaty is UTC+5.
-        let csv = SessionHistory.csv([play, tune], timeZone: TimeZone(secondsFromGMT: 5 * 3600)!)
+        let csv = SessionHistory.csv([play, warmUp, tune], timeZone: TimeZone(secondsFromGMT: 5 * 3600)!)
         XCTAssertTrue(csv.hasSuffix("\r\n"))
         let lines = csv.components(separatedBy: "\r\n").dropLast()
-        XCTAssertEqual(lines.count, 3)
+        XCTAssertEqual(lines.count, 4)
         XCTAssertEqual(lines[0], SessionHistory.csvHeader.joined(separator: ";"))
-        XCTAssertEqual(lines[0].split(separator: ";", omittingEmptySubsequences: false).count, 21)
+        XCTAssertEqual(SessionHistory.csvHeader.count, 34)
+        XCTAssertEqual(Array(SessionHistory.csvHeader[0..<5]), ["Код ребёнка", "Дата", "Время", "Игра", "Управление"])
+        // The four numbers of the report sit together, right after the play's own columns.
+        XCTAssertEqual(Array(SessionHistory.csvHeader[8..<14]), [
+            "Удержание взгляда, %", "Отклонение от ритма, мс", "Красных знаков", "Ошибок на красных",
+            "Подмигивания левым, %", "Подмигивания правым, %",
+        ])
         // Oldest first: the rhythm play of Wednesday, its code quoted because it holds a separator and quotes.
-        XCTAssertEqual(lines[1], "\"К;\"\"07\"\"\";2026-11-11;14:00;Ритм;палец;1,0;;;;;;;;Track;hard;81;4;3;1;3;")
-        XCTAssertEqual(lines[2], "К-07;2026-11-12;10:30;Метеориты;взгляд;4,2;1,23;3;2;67;0,88;0,33;3;;;;;;;;")
+        XCTAssertEqual(lines[1], [
+            "\"К;\"\"07\"\"\"", "2026-11-11", "14:00", "Ритм", "палец", "1,0", "", "100",
+            "", "42", "", "", "", "",
+            "", "", "", "", "", "",
+            "Track", "hard", "81", "4", "3", "1", "3", "", "123",
+            "", "", "", "", "",
+        ].joined(separator: ";"))
+        XCTAssertEqual(lines[2], [
+            "К-07", "2026-11-12", "10:30", "Метеориты", "взгляд", "4,2", "1,23", "70",
+            "50", "", "3", "1", "", "",
+            "3", "2", "67", "0,88", "0,33", "3",
+            "", "", "", "", "", "", "", "", "",
+            "", "", "", "", "",
+        ].joined(separator: ";"))
+        XCTAssertEqual(lines[3], [
+            "К-07", "2026-11-12", "11:05", "Разминка", "взгляд", "1,0", "0,95", "100",
+            "60", "", "", "", "", "",
+            "", "", "", "", "", "",
+            "", "", "", "", "", "", "", "", "",
+            "1,38", "100", "0", "0", "20",
+        ].joined(separator: ";"))
+        for line in lines.dropFirst() where !line.hasPrefix("\"") {
+            XCTAssertEqual(line.split(separator: ";", omittingEmptySubsequences: false).count, 34)
+        }
     }
 
     func testNumbersUseADecimalComma() {

@@ -13,6 +13,8 @@ enum Route: Equatable {
     case winkTest
     /// Rhythm mode: notes land on the beat of a track; look at each one and wink as it lands.
     case rhythm
+    /// The 60-second warm-up: one target glides across the screen and the eyes follow it.
+    case pursuit
 }
 
 enum ControlMode { case eyes, touch }
@@ -51,11 +53,50 @@ final class AppModel: ObservableObject {
         didSet {
             lookedAtMeteor = nil
             applyBrightness()
-            if oldValue == .game, route != .game { finishMeteorPlay() }
+            if oldValue == .game, route != .game {
+                gamePaused = false
+                finishMeteorPlay()
+            }
             if route == .game, oldValue != .game { beginMeteorPlay() }
+            if oldValue == .pursuit, route != .pursuit { dropPursuit() }
+            updateAmbient()
         }
     }
     @Published var mode: ControlMode = .eyes
+    /// «Мелкие цели»: every target and its hit zone 30% smaller (balance.json `targetScale`), in both games.
+    /// On unless switched off; kept between launches.
+    @Published var smallTargets = UserDefaults.standard.object(forKey: "smallTargets") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(smallTargets, forKey: "smallTargets") }
+    }
+    /// «Красные знаки»: the meteor game sends in red signs the player must not look at.
+    @Published var decoysOn = UserDefaults.standard.object(forKey: "decoys") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(decoysOn, forKey: "decoys") }
+    }
+    /// The calm music of the meteor game; the speaker button in the game switches it too.
+    @Published var musicOn = UserDefaults.standard.object(forKey: "music") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(musicOn, forKey: "music")
+            updateAmbient()
+        }
+    }
+    /// The meteor game is on its pause plate (GameView sets it): the music fades out until play goes on.
+    var gamePaused = false {
+        didSet { if gamePaused != oldValue { updateAmbient() } }
+    }
+    private let ambient = AmbientPlayer()
+
+    /// The scale of every target and hit zone now: balance.json's with «Мелкие цели», 1 without.
+    var targetScale: Double { smallTargets ? balance.smallTargetScale : 1 }
+    /// With small targets no hit zone gets smaller than this (screen pt): 1.25 times what the calibration missed
+    /// by on its check screen. 0 by finger and with regular targets.
+    var zoneFloorPt: Double {
+        balance.zoneFloor(measuredErrorPt: mode == .eyes ? report?.meanErrorPt : nil, scale: targetScale)
+    }
+
+    /// The music plays while the meteor game is on screen, in front, not paused and not muted.
+    private func updateAmbient() {
+        ambient.setPlaying(route == .game && musicOn && active && !gamePaused)
+    }
     @Published var report: AccuracyReport?
     @Published var showDebug = false
     @Published var usePupils = true
@@ -97,6 +138,9 @@ final class AppModel: ObservableObject {
 
     /// Current gaze for the game (screen pt). Not @Published: read every frame by the scene.
     private(set) var gaze: GazeInput = .lost
+    /// The gaze point is the one kept from before an eyelid moved (a blink), not a fresh look. A red sign's look
+    /// does not count such frames.
+    private(set) var gazeHeld = false
     private(set) var model: RidgeModel?
     private var filter = OneEuroFilter2D()
     private var lastStatusPush = 0.0
@@ -125,6 +169,8 @@ final class AppModel: ObservableObject {
     /// Rhythm mode: the tracks in the bundle (tracks.json) and the play in progress.
     let rhythmTracks: [RhythmTrack]
     @Published private(set) var rhythm: RhythmSession?
+    /// The report of the rhythm play that just ended, for its results screen.
+    @Published private(set) var rhythmSummary: SessionSummary?
     private var rhythmTimer: Timer?
 
     /// Points per centimetre. Current iPhones are about 60 pt/cm (163 pt per inch on 2x, ~153 on 3x Pro).
@@ -160,6 +206,9 @@ final class AppModel: ObservableObject {
             } else if bot == "rhythm" {
                 mode = .eyes
                 route = .rhythm
+            } else if bot == "pursuit" {
+                mode = .eyes
+                route = .pursuit
             } else {
                 mode = bot == "eyes" ? .eyes : .touch
                 route = .game
@@ -203,6 +252,9 @@ final class AppModel: ObservableObject {
     func scenePhaseChanged(active: Bool) {
         self.active = active
         applyBrightness()
+        updateAmbient()
+        // A warm-up that was interrupted is not a minute of following: it ends without a result.
+        if !active, route == .pursuit { route = .menu }
         guard var p = meteorPlay else { return }
         let now = CACurrentMediaTime()
         if active {
@@ -262,6 +314,7 @@ final class AppModel: ObservableObject {
             }
         }
 
+        gazeHeld = s.features != nil && blink.freezeGaze
         if s.features != nil, blink.freezeGaze {
             // Eyelid closing: the pupils drift down and the prediction dips, so keep the last gaze point
             // (screen pt) and do not feed the filter. Eyes shut longer than a blink count as tracking lost.
@@ -322,6 +375,16 @@ final class AppModel: ObservableObject {
         if route == .winkTest, let f = s.features {
             logger.sample(kind: "wink_frame", time: s.timestamp, target: nil, gaze: gazePoint, f: f,
                           blink: s.blink, hold: false, processingMs: s.processingMs, light: s.light)
+        }
+        if route == .pursuit, mode == .eyes, let p = pursuit, p.phase == .running {
+            // Every tracked frame of the warm-up: the distance from the gaze to the target (screen pt). A frame
+            // with no face, or with the eyes away from the screen, counts as off the target.
+            let target = p.sample(host: s.timestamp, gaze: gazePoint)
+            if let f = s.features {
+                logger.sample(kind: "pursuit_frame", time: s.timestamp, target: target ?? p.target(host: s.timestamp),
+                              gaze: gazePoint, f: f, blink: s.blink, hold: blink.freezeGaze, processingMs: s.processingMs,
+                              correction: adapter == nil ? nil : aimCorrection, light: s.light)
+            }
         }
         // The wink test draws the eyelids live, so it gets the numbers 30 times a second.
         if s.timestamp - lastStatusPush > (route == .winkTest ? 1.0 / 30 : 0.1) {
@@ -420,9 +483,10 @@ final class AppModel: ObservableObject {
     func prepareRhythm(track: RhythmTrack, level: RhythmLevel, screen: Vec2) {
         rhythm?.stop()
         winkDetector = WinkDetector()
+        rhythmSummary = nil
         rhythm = RhythmSession(track: track, level: level, screen: screen,
                                measuredErrorPt: mode == .eyes ? report?.meanErrorPt : 0,
-                               latencySec: RhythmRecords.latencySec)
+                               latencySec: RhythmRecords.latencySec, targetScale: targetScale, zoneFloorPt: zoneFloorPt)
         startRhythmTimer()
     }
 
@@ -534,10 +598,14 @@ final class AppModel: ObservableObject {
             s.isNewBest = RhythmRecords.save(s.track, s.level, score: s.judge.score, stars: s.judge.stars)
             logger.rhythmEnd(time: now, score: s.judge.score, accuracy: s.judge.accuracy, latency: s.judge.latencySec)
             let played = now - (s.startHost ?? now)
-            keep(.rhythm(id: UUID().uuidString, childCode: currentChildCode, start: Date().addingTimeInterval(-played),
-                         durationSec: played, byEye: mode == .eyes,
-                         calibrationErrorCm: mode == .eyes ? report?.meanErrorCm : nil,
-                         track: s.track.title, level: s.level, judge: s.judge))
+            let summary = SessionSummary.rhythm(id: UUID().uuidString, childCode: currentChildCode,
+                                                start: Date().addingTimeInterval(-played), durationSec: played,
+                                                byEye: mode == .eyes,
+                                                calibrationErrorCm: mode == .eyes ? report?.meanErrorCm : nil,
+                                                track: s.track.title, level: s.level, judge: s.judge,
+                                                targetScale: s.targetScale)
+            keep(summary)
+            rhythmSummary = summary
         }
     }
 
@@ -602,6 +670,99 @@ final class AppModel: ObservableObject {
             }
         case .done:
             botAim = nil
+        }
+    }
+    #endif
+
+    // MARK: warm-up
+
+    /// The warm-up in progress (made by its screen, which knows its size).
+    @Published private(set) var pursuit: PursuitSession?
+    /// Touch mode: where the finger is on the warm-up screen (screen pt), nil when it is up.
+    var pursuitTouch: Vec2?
+    private var pursuitTimer: Timer?
+
+    /// Opens the warm-up by eye (calibrating first when there is no calibration yet) or by finger.
+    func openPursuit(byEye: Bool) {
+        mode = byEye ? .eyes : .touch
+        if byEye, model == nil {
+            beginCalibration(then: .pursuit)
+            return
+        }
+        route = .pursuit
+    }
+
+    /// The warm-up screen is up on a screen this size (pt): the target rests for three seconds, then moves.
+    func beginPursuit(screen: Vec2) {
+        guard route == .pursuit, pursuit == nil else { return }
+        let now = CACurrentMediaTime()
+        let p = PursuitSession(screen: screen, byEye: mode == .eyes, measuredErrorPt: report?.meanErrorPt,
+                               targetScale: targetScale, now: now)
+        pursuit = p
+        pursuitTouch = nil
+        logger.pursuitStart(time: p.startHost, radiusPt: p.radiusPt, durationSec: p.plan.durationSec)
+        pursuitTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.pursuitTick() }
+        RunLoop.main.add(t, forMode: .common)
+        pursuitTimer = t
+    }
+
+    private func pursuitTick() {
+        guard let p = pursuit, route == .pursuit else {
+            pursuitTimer?.invalidate()
+            pursuitTimer = nil
+            return
+        }
+        let now = CACurrentMediaTime()
+        #if DEBUG
+        let bot = autoplay == "pursuit"
+        if bot { pursuitBotStep(p, now) }
+        #else
+        let bot = false
+        #endif
+        // By eye the frames are counted as the tracking delivers them (`handle`); by finger and for the bot, here.
+        if mode == .touch || bot, p.phase == .running {
+            p.sample(host: now, gaze: mode == .touch ? pursuitTouch : gazePoint)
+        }
+        guard p.tick(host: now) else { return }
+        // No frame at all (the camera never delivered one): there is nothing to report.
+        guard !p.tally.isEmpty else {
+            route = .menu
+            return
+        }
+        let summary = SessionSummary.pursuit(id: UUID().uuidString, childCode: currentChildCode,
+                                             start: Date().addingTimeInterval(-p.plan.durationSec),
+                                             durationSec: p.plan.durationSec, byEye: p.byEye,
+                                             calibrationErrorCm: p.byEye ? report?.meanErrorCm : nil,
+                                             tally: p.tally, ptPerCm: ptPerCm)
+        logger.pursuitEnd(time: now, onTarget: p.tally.all.share, meanDistancePt: p.tally.meanDistancePt)
+        keep(summary)
+        route = .menu
+        lastSummary = summary
+    }
+
+    /// The warm-up screen closed: an unfinished warm-up leaves no result.
+    private func dropPursuit() {
+        pursuitTimer?.invalidate()
+        pursuitTimer = nil
+        pursuit = nil
+        pursuitTouch = nil
+        #if DEBUG
+        botAim = nil
+        #endif
+    }
+
+    #if DEBUG
+    /// Simulator smoke test (`-SpantherAutoplay pursuit`): follows the target a little late and a little off, has no
+    /// gaze for three seconds of the horizontal part and stares into a corner for three seconds of the eight.
+    private func pursuitBotStep(_ p: PursuitSession, _ now: Double) {
+        let t = p.time(host: now)
+        if t >= 12, t < 15 {
+            botAim = nil
+        } else if t >= 44, t < 47 {
+            botAim = Vec2(40, 40)
+        } else {
+            botAim = p.target(host: now - 0.12) + Vec2(18, -12)
         }
     }
     #endif
@@ -717,6 +878,13 @@ final class AppModel: ObservableObject {
         meteorPlay?.tally.add(r)
     }
 
+    /// A red sign left the play at `position` (screen pt): looked at (an error) or passed by.
+    func log(_ r: DecoyRecord, at position: Vec2) {
+        logger.decoy(r, at: position, time: CACurrentMediaTime())
+        if meteorPlay == nil, route == .game { beginMeteorPlay() }
+        meteorPlay?.tally.add(r)
+    }
+
     // MARK: session report
 
     /// The code the specialist gave the child instead of a name; every play is saved under it. Kept between launches.
@@ -736,6 +904,8 @@ final class AppModel: ObservableObject {
         let childCode: String
         let byEye: Bool
         let calibrationErrorCm: Double?
+        /// The scale the targets and hit zones have in this play.
+        let targetScale: Double
         var tally = MeteorTally()
         /// Seconds on screen with the app in front, before `since`: the host time it last came to the front.
         var shownSec = 0.0
@@ -746,7 +916,10 @@ final class AppModel: ObservableObject {
     private func beginMeteorPlay() {
         meteorPlay = MeteorPlay(childCode: currentChildCode, byEye: mode == .eyes,
                                 calibrationErrorCm: mode == .eyes ? report?.meanErrorCm : nil,
-                                since: active ? CACurrentMediaTime() : nil)
+                                targetScale: targetScale, since: active ? CACurrentMediaTime() : nil)
+        logger.game(time: CACurrentMediaTime(), targetScale: targetScale, zoneFloorPt: zoneFloorPt, decoys: decoysOn)
+        // The CI bot's game opens in `init`, where `route` runs no observer: its music starts here.
+        updateAmbient()
     }
 
     /// Writes the meteor play so far into the history, under its id, so that a later save replaces it.
@@ -755,7 +928,7 @@ final class AppModel: ObservableObject {
         guard let p = meteorPlay, !p.tally.isEmpty else { return nil }
         let shown = p.shownSec + (p.since.map { CACurrentMediaTime() - $0 } ?? 0)
         let s = p.tally.summary(id: p.id, childCode: p.childCode, start: p.start, durationSec: shown, byEye: p.byEye,
-                                calibrationErrorCm: p.calibrationErrorCm)
+                                calibrationErrorCm: p.calibrationErrorCm, targetScale: p.targetScale)
         keep(s)
         return s
     }
@@ -765,6 +938,13 @@ final class AppModel: ObservableObject {
         let s = saveMeteorPlay()
         meteorPlay = nil
         if route == .menu { lastSummary = s }
+        #if DEBUG
+        // The Simulator run reads this to see that the music's engine started and made sound.
+        if autoplay != nil {
+            try? ambient.debugLine().write(to: FileManager.default.temporaryDirectory.appendingPathComponent("ambient.txt"),
+                                           atomically: true, encoding: .utf8)
+        }
+        #endif
     }
 
     /// Adds a play to the history, or replaces the one with its id, and writes the history to the phone.
@@ -803,6 +983,22 @@ final class AppModel: ObservableObject {
             s.meanFirstLookSec = m.2
             s.slipsPerMeteor = m.3
             s.maxLevel = m.4
+            s.targetScale = 0.7
+            s.holdShare = [0.52, 0.58, 0.61, 0.70, 0.74][k]
+            s.decoys = [26, 27, 29, 30, 31][k]
+            s.decoyErrors = [9, 7, 7, 5, 4][k]
+            out.append(s)
+        }
+        for k in 0..<2 {
+            var s = SessionSummary(id: "demo-p\(k)", childCode: "К-07", game: .pursuit,
+                                   start: now.addingTimeInterval(-Double(4 - 4 * k) * day - 1300), durationSec: 60,
+                                   byEye: true, calibrationErrorCm: [1.3, 1.2][k])
+            s.holdShare = [0.71, 0.84][k]
+            s.pursuitMeanCm = [1.9, 1.4][k]
+            s.pursuitHorizontal = [0.80, 0.91][k]
+            s.pursuitVertical = [0.74, 0.86][k]
+            s.pursuitEight = [0.60, 0.76][k]
+            s.pursuitLostShare = [0.06, 0.03][k]
             out.append(s)
         }
         for k in 0..<3 {
@@ -817,6 +1013,12 @@ final class AppModel: ObservableObject {
             s.perfect = 17 + 3 * k
             s.maxCombo = 9 + 3 * k
             s.extraWinks = 7 - 2 * k
+            s.targetScale = 0.7
+            s.holdShare = 0.78 + 0.05 * Double(k)
+            s.timingDeviationMs = 64 - 9 * Double(k)
+            s.timingOffsetMs = 118
+            s.winkLeft = 0.80 + 0.04 * Double(k)
+            s.winkRight = 0.66 + 0.07 * Double(k)
             out.append(s)
         }
         for k in 0..<2 {
@@ -828,6 +1030,10 @@ final class AppModel: ObservableObject {
             s.meanFirstLookSec = 1.3 - 0.1 * Double(k)
             s.slipsPerMeteor = 0.4
             s.maxLevel = 2
+            s.targetScale = 0.7
+            s.holdShare = 0.7
+            s.decoys = 20
+            s.decoyErrors = 2 - k
             out.append(s)
         }
         return out.sorted { $0.start < $1.start }
