@@ -1,0 +1,36 @@
+PASS menu: app running
+PASS eyes: app running after 60 s
+PASS eyes: 38 meteors logged
+PASS eyes: 38 kills spent energy
+PASS eyes: pool ran dry and was reloaded 5 times
+PASS eyes: level 1 ended
+PASS eyes: energy accounting matches balance.json
+PASS eyes: 14 red signs, 5 looked at, 9 passed by, target scale 0.70, signs on 1
+PASS eyes: app running on the summary
+PASS eyes: 1 meteor play kept: 38 of 38 burned, hold 0.47, red signs looked at 5 of 14, target scale 0.7
+PASS music: ambient playing, 48000 Hz, 5789184 frames, peak 0.338
+PASS touch: app running after 60 s
+PASS touch: 52 meteors logged
+PASS touch: 52 kills spent energy
+PASS touch: pool ran dry and was reloaded 7 times
+PASS touch: level 1 ended
+PASS touch: energy accounting matches balance.json
+PASS touch: 20 red signs, 7 looked at, 13 passed by, target scale 0.70, signs on 1
+PASS wink: app running after the test
+PASS wink: 1 run, 60 cues, 67 closures, 6226 frames, hits left 27/30 right 24/30, wrong eye 3, both eyes 3
+PASS rhythm: app running after the track
+PASS rhythm: 1 start, 1 end, 95 notes, 81 played, 14 missed, 95 judged, 81 of 81 winks on the locked note, accuracy 0.85, learned delay 118 ms, score 9798
+PASS rhythm: the play screen changes between screenshots
+PASS warm-up: app running after the minute
+PASS warm-up: the screen changes between screenshots
+PASS warm-up: started and ended once in the CSV
+PASS history: 3 plays kept, 1 rhythm, the last with 81 of 95 notes played, accuracy 0.85, timing deviation 34 ms, gaze held 1.00, winks left 0.93 right 0.93
+PASS warm-up: 1 warm-up kept: gaze near the dot 0.89 (horizontal 0.83, vertical 1.00, eight 0.84), no gaze 0.055, mean distance 0.75 cm
+PASS report summary: app running
+PASS report history: app running
+PASS report settings: app running
+PASS menu on iPhone SE: app running
+PASS rhythm track list on iPhone SE: app running
+PASS report history on iPhone SE: app running
+PASS report summary on iPhone SE: app running
+PASS report settings on iPhone SE: app running

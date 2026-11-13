@@ -1,0 +1,1 @@
+ambient playing, 48000 Hz, 5789184 frames, peak 0.338

@@ -1,0 +1,1 @@
+1 warm-up kept: gaze near the dot 0.89 (horizontal 0.83, vertical 1.00, eight 0.84), no gaze 0.055, mean distance 0.75 cm

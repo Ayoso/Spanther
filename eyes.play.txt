@@ -1,0 +1,1 @@
+1 meteor play kept: 38 of 38 burned, hold 0.47, red signs looked at 5 of 14, target scale 0.7

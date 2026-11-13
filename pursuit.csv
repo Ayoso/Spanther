@@ -1,0 +1,3 @@
+kind,time,target_x_pt,target_y_pt,gaze_x_pt,gaze_y_pt,lookat_x_m,lookat_y_m,eyeaxis_x_m,eyeaxis_y_m,yaw_rad,pitch_rad,roll_rad,distance_m,pupil_u,pupil_v,class,level,reaction_s,lifetime_s,slips,destroyed,blink_s,energy,blink_l,blink_r,hold,proc_ms,video_format,formats_offered,thermal,low_power,screen_orientation,vision_orientation,side,other_peak,decision_ms,period_s,audio_latency_s,track,rhythm_level,note,judgement,offset_s,aim_pt,label_src,accepted,corr_x_pt,corr_y_pt,score,accuracy,latency_s,locked,night,light_lm,distraction,target_scale,zone_floor_pt,decoy_looked
+pursuit_start,1106.37704,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,60.00000,,,,,,,90.00000,,,,,,,,,,,,,,
+pursuit_end,1166.37862,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,45.24381,,,,,,0.89051,,,,,,,,
